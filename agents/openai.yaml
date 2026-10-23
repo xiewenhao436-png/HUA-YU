@@ -1,0 +1,9 @@
+interface:
+  display_name: "画屿"
+  short_description: "安装画屿插件，打开本地项目画布。"
+  icon_small: "./assets/icon.png"
+  icon_large: "./assets/icon.png"
+  brand_color: "#14161B"
+  default_prompt: "使用 $huayu 安装画屿插件，并打开当前项目的画布；保留已有画布和素材。"
+policy:
+  allow_implicit_invocation: true

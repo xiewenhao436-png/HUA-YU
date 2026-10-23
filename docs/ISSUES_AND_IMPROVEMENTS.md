@@ -1,0 +1,29 @@
+# Potential Issues And Improvements
+
+This technical note includes behavior inherited from Codex Canvas. For current
+画屿 installation requirements and platform verification limits, follow
+[README](../README.md) and [the release guide](RELEASING.md). Cross-platform
+core/browser tests do not establish native macOS clipboard or trackpad acceptance.
+
+## Current Issues
+
+- `/canvas` opens a self-contained MCP App in the plugin side panel by default. State, images, edits, and exports use scoped app-only MCP calls without an HTTP listener. CLI/browser opening remains available as a compatibility fallback.
+- Personal marketplace registration uses `npm run install:personal`, which updates `~/.agents/plugins/marketplace.json` and points `~/plugins/huayu` at this repository. Install the independent plugin as `huayu@personal`; the legacy canvas data directory remains unchanged.
+- MCP stdio support is implemented with a minimal JSON-RPC handler. Smoke coverage now exercises `initialize`, `tools/list`, and an actual `canvas_status` tool call, including the rule that thread-scoped canvases require explicit `threadId` and do not infer the last runtime binding. Replacing the hand-rolled handler with the official MCP SDK is still a maintainability improvement, but it is no longer a known blocker for tool discovery.
+- Image auto-collection is thread-scoped: the local canvas service watches and polls only `~/.codex/generated_images/<threadId>` for a bound canvas, while the skill still prefers importing explicit `imagegen` output paths. It never scans the project root or the global generated-images root by default, and an unbound canvas performs no automatic collection. CLI/MCP callers can still provide explicit recovery roots when a user intentionally requests a broader scan.
+- Canvas navigation now starts in Select so objects are immediately discoverable and selectable. Hand remains available for primary-button panning from blank space or over objects, while middle-button and temporary Space-drag panning work in Select mode; unmodified wheel input follows two-axis trackpad scrolling and Ctrl/pinch zoom stays anchored under the pointer.
+- Canvas history now provides scoped Undo and Redo controls plus `Cmd/Ctrl+Z`, `Cmd/Ctrl+Shift+Z`, and `Ctrl+Y`. Create, upload/crop, delete, move, resize, text, color, layer-group reset/lock, and layer reorder mutations use a serialized command queue; batch transforms are atomic, running job placeholders cannot be deleted, and the server rejects stale commands after a canvas is rebound to another thread.
+- The project switcher uses a persistent registry at `~/.agents/codex-canvas/projects.json`, so registered project canvases are restored after the local Codex-Canvas service restarts. Restored bound canvases resume only their own thread-scoped watcher and polling fallback when auto-collection is enabled.
+- Canvas objects can be searched through CLI, HTTP, MCP, and a compact in-canvas UI by name, prompt, text, source path, and layer-group metadata.
+- Prompt history is available through CLI, HTTP, MCP, and a lightweight in-canvas browser by deriving recent unique prompts from canvas objects. A richer prompt management workflow is still future work.
+- Version grouping is available through CLI, HTTP, MCP, and the in-canvas discovery panel by grouping canvas objects on `sourceObjectId`, `batchId`, `layoutMode`, or `prompt`. The discovery panel shows image thumbnails, can select and frame grouped versions for side-by-side comparison, and can draw a temporary pixel-diff heatmap overlay around grouped versions.
+- The Lovart visual match is approximate. A reference screenshot was inspected and the current UI follows the broad shape: light canvas, bottom dock, selected-image toolbar, crop overlay, and prompt-driven edit panels. Browser-based visual regression now compares deterministic desktop/mobile baselines for discovery, selected-toolbar, crop, expand, version-compare, version-annotation, and Edit Text states, but pixel-level spacing, iconography, transitions, and interaction details still need broader visual QA.
+- Lovart's page was not friendly to Chrome extension DOM automation in this run; reference inspection used a system screenshot after bringing Chrome to the foreground.
+- `Quick Edit`, `Remove BG`, `Expand`, `Edit Text`, and `Edit Elements` are implemented as background jobs backed by dedicated Codex-Canvas operation skills. The action contract is covered across frontend buttons, HTTP job validation, and MCP `start_image_job` schema. `Edit Elements` also has deterministic smoke coverage for segmentation artifacts, completed background normalization, layer stack/group metadata, and missing-segmentation failures, plus browser-level visual smoke coverage for locked layer-group rendering and toolbar behavior. Broader visual QA is still useful because generated output quality can vary by operation.
+
+## Improvement Space
+
+- Add a real infinite-canvas engine such as tldraw once the Codex integration contract is stable.
+- Add a Codex lifecycle hook for image outputs so thread-scoped watcher fallback can eventually become fully event-specific.
+- Add idempotent command ids and persisted history if undo/redo must survive a page reload or an ambiguous network disconnect; the current history is intentionally local to the open canvas session.
+- Add first-class cancellation for running AI jobs before making job creation itself undoable.

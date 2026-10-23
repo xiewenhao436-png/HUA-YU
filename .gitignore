@@ -1,0 +1,28 @@
+/canvas/
+assets/original/
+node_modules/
+.DS_Store
+npm-debug.log*
+*.traineddata
+
+# Local environment and logs
+.env
+.env.*
+*.log
+
+# Python local tooling/cache
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Build and coverage outputs
+dist/
+build/
+coverage/
+
+# Public examples use our own synthetic fixture screenshot.
+assets/readme/*
+!assets/readme/center.png
+*.tgz
+/*.png

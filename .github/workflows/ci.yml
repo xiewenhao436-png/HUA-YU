@@ -1,0 +1,166 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Never interrupt a main-branch release while assets are being attached.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+        node:
+          - 22.13.1
+          - 24.x
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install image-processing test dependencies
+        run: python -m pip install --disable-pip-version-check --no-input Pillow numpy
+
+      - name: Run core, library, recycle bin and metadata discovery tests
+        run: npm run test:core
+
+      - name: Verify native sidebar bundle
+        if: matrix.node == '24.x'
+        run: node scripts/build-app.mjs --check
+
+      - name: Install browser for sidebar checks
+        if: matrix.node == '24.x'
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify sidebar in an isolated MCP App sandbox
+        if: matrix.node == '24.x'
+        run: npm run test:ui
+
+      - name: Upload UI screenshots when a test fails
+        if: failure() && matrix.node == '24.x'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-failure-${{ matrix.os }}
+          path: "dist/**/*.png"
+          if-no-files-found: ignore
+
+      - name: Verify release metadata
+        if: runner.os == 'Linux' && matrix.node == '24.x'
+        run: npm run verify:release
+
+      - name: Verify bundled dependency licenses
+        if: runner.os == 'Linux' && matrix.node == '24.x'
+        run: node scripts/collect-licenses.mjs --check
+
+      - name: Verify release package
+        if: runner.os == 'Linux' && matrix.node == '24.x'
+        run: node scripts/build-release.mjs --output-dir dist/release-ci
+
+      - name: Smoke test installed release package
+        if: runner.os == 'Linux' && matrix.node == '24.x'
+        run: node scripts/verify-release-archive.mjs dist/release-ci/huayu-v$(node -p "require('./package.json').version").tgz
+
+  publish:
+    name: Publish the validated version
+    needs: test
+    if: >-
+      github.repository == 'xiewenhao436-png/HUA-YU' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check out the exact commit that passed every platform
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify release metadata
+        run: npm run verify:release
+
+      - name: Select an unpublished version
+        id: version
+        shell: bash
+        run: |
+          TAG="v$(node -p "require('./package.json').version")"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release $TAG already exists; its tag and assets will be preserved."
+          elif git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists without a visible Release. Refusing to replace it."
+            exit 1
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build universal package and checksums
+        if: steps.version.outputs.exists != 'true'
+        run: node scripts/build-release.mjs --output-dir dist/release
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_COMMIT: ${{ github.sha }}
+
+      - name: Smoke test the installed release package
+        if: steps.version.outputs.exists != 'true'
+        run: node scripts/verify-release-archive.mjs "dist/release/huayu-${{ steps.version.outputs.tag }}.tgz"
+
+      - name: Create release without replacing any existing tag or asset
+        if: steps.version.outputs.exists != 'true'
+        shell: bash
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release create "$TAG" \
+            "dist/release/huayu-${TAG}.tgz" \
+            dist/release/release-manifest.json \
+            dist/release/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "画屿 $TAG" \
+            --notes "画屿本地无限画布。此版本已通过 Windows、macOS、Linux 的核心测试和 Chromium 侧栏测试。macOS 原生剪贴板与触控板体验仍待真机确认。安装与兼容说明请参阅仓库 README。"

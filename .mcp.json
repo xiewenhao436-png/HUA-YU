@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "huayu": {
+      "command": "node",
+      "args": ["./src/mcp-server.mjs"],
+      "cwd": "."
+    }
+  }
+}

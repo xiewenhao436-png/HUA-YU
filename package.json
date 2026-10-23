@@ -1,0 +1,103 @@
+{
+  "name": "huayu",
+  "version": "0.1.0",
+  "description": "画屿：面向分镜、图片与项目素材的本地画布工作台。",
+  "type": "module",
+  "homepage": "https://github.com/xiewenhao436-png/HUA-YU",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xiewenhao436-png/HUA-YU.git"
+  },
+  "bin": {
+    "huayu": "./bin/huayu.mjs",
+    "codex-canvas": "./bin/codex-canvas.mjs"
+  },
+  "files": [
+    ".codex-plugin/",
+    ".mcp.json",
+    "AGENTS.md",
+    "INSTALL.md",
+    "README.md",
+    "README.zh-CN.md",
+    "README.ja.md",
+    "SKILL.md",
+    "LICENSE",
+    "assets/icon.png",
+    "assets/lucide-license.txt",
+    "bin/",
+    "public/app.js",
+    "public/canvas-history.js",
+    "public/canvas-media.js",
+    "public/canvas-library.js",
+    "public/canvas-center.js",
+    "public/canvas-import-frames.js",
+    "public/icon.png",
+    "public/index.html",
+    "public/styles.css",
+    "scripts/compose_annotations.py",
+    "scripts/checkout-stable-release.mjs",
+    "scripts/install-codex-plugin.mjs",
+    "scripts/install-personal-plugin.mjs",
+    "scripts/prepare_completed_background.py",
+    "scripts/prepare_expand_canvas.py",
+    "scripts/remove_chroma_key_connected.py",
+    "scripts/split_elements.py",
+    "scripts/verify_elements_layers.py",
+    "skills/",
+    "src/",
+    "public/canvas-app.html",
+    "public/canvas-transport.js",
+    "THIRD_PARTY_NOTICES.md",
+    "LICENSES/",
+    "UPSTREAM.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "setup:ocr": "node ./bin/huayu.mjs setup-ocr",
+    "setup:image-deps": "node ./bin/huayu.mjs setup-image-deps",
+    "setup:deps": "node ./bin/huayu.mjs setup-deps",
+    "checkout:stable": "node ./scripts/checkout-stable-release.mjs",
+    "install:personal": "node ./scripts/install-personal-plugin.mjs",
+    "install:dev-cache": "node ./scripts/link-dev-plugin-cache.mjs",
+    "doctor:ocr": "node ./bin/huayu.mjs doctor-ocr --json",
+    "doctor:image-deps": "node ./bin/huayu.mjs doctor-image-deps --json",
+    "doctor:deps": "node ./bin/huayu.mjs doctor-deps --json",
+    "start": "node ./bin/huayu.mjs start",
+    "validate": "node ./bin/huayu.mjs status --json",
+    "smoke": "node ./scripts/smoke.mjs",
+    "smoke:visual": "node ./scripts/visual-smoke.mjs",
+    "visual:regression": "node ./scripts/visual-regression.mjs",
+    "verify:release": "node ./scripts/verify-release.mjs",
+    "verify:archive": "node ./scripts/verify-release-archive.mjs",
+    "build:release": "node ./scripts/build-release.mjs",
+    "test": "npm run test:core",
+    "build:app": "node scripts/build-app.mjs",
+    "test:app": "node --test scripts/mcp-app.test.mjs scripts/windows-path-alias.test.mjs",
+    "smoke:app": "node scripts/visual-app-smoke.mjs",
+    "test:core": "npm run smoke && node --test scripts/mcp-app.test.mjs scripts/windows-path-alias.test.mjs scripts/canvas-library.test.mjs scripts/canvas-trash.test.mjs scripts/canvas-index-discovery.test.mjs",
+    "test:ui": "node --test scripts/runtime-version.test.mjs && node scripts/visual-app-smoke.mjs && node scripts/center-trash-app-smoke.mjs && node scripts/library-app-smoke.mjs && node scripts/media-app-smoke.mjs && node scripts/restart-app-smoke.mjs && node scripts/project-switcher-app-smoke.mjs"
+  },
+  "keywords": [
+    "codex",
+    "plugin",
+    "canvas",
+    "imagegen"
+  ],
+  "author": {
+    "name": "画屿 Contributors"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "ag-psd": "^31.0.0",
+    "cross-spawn": "^7.0.6",
+    "pngjs": "^7.0.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/ext-apps": "1.7.5",
+    "esbuild": "0.25.11",
+    "playwright": "1.61.1"
+  }
+}

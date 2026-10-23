@@ -1,0 +1,43 @@
+{
+  "name": "huayu",
+  "version": "0.1.0",
+  "description": "画屿：在 Codex 中整理分镜、图片和项目素材的本地无限画布。",
+  "author": {
+    "name": "xiewenhao436-png"
+  },
+  "homepage": "https://github.com/xiewenhao436-png/HUA-YU",
+  "repository": "https://github.com/xiewenhao436-png/HUA-YU.git",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "canvas",
+    "imagegen",
+    "images"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "画屿",
+    "shortDescription": "按项目管理画布、分镜和生成图片。",
+    "longDescription": "画屿为 Codex 提供本地无限画布，在原生侧栏中收集生成图片、查看大图、整理项目素材、跨会话导入和管理回收站。支持后台图片编辑任务，并保留旧版 Codex Canvas 的画布与素材兼容性。",
+    "developerName": "xiewenhao436-png",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/xiewenhao436-png/HUA-YU",
+    "privacyPolicyURL": "https://github.com/xiewenhao436-png/HUA-YU#隐私与数据",
+    "termsOfServiceURL": "https://github.com/xiewenhao436-png/HUA-YU/blob/main/LICENSE",
+    "defaultPrompt": [
+      "打开画屿画布中心",
+      "生成图片并收集到当前画布",
+      "查看当前画布状态"
+    ],
+    "brandColor": "#14161B",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/icon.png",
+    "screenshots": []
+  }
+}
