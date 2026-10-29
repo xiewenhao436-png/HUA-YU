@@ -86,7 +86,7 @@ test("mock CLI receives one ephemeral job, ordered references, stdin and compati
     await t.test("default low uses native image model selection and no forced text model", async () => {
       const { job, result, capture } = await run("defaults");
       assert.equal(result.code, 0);
-      assert.equal(capture.cwd, projectDir);
+      assert.equal(await fs.realpath(capture.cwd), await fs.realpath(projectDir));
       assert.equal(capture.invocations, 1);
       assert.deepEqual(capture.args.slice(0, 2), ["exec", "--ephemeral"]);
       assert.deepEqual(capture.args.slice(-2), ["--", "-"]);
