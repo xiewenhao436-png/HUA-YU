@@ -64,7 +64,7 @@ test("new canvas center refuses unsupported deletion before calling an old MCP",
   const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ? pathToFileURL(process.env.PLAYWRIGHT_MODULE).href : "playwright");
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_EXECUTABLE || undefined });
   try {
-    const page = await browser.newPage();
+    const page = await browser.newPage({ locale: "zh-CN" });
     const errors = []; page.on("pageerror", error => errors.push(error.message));
     await page.setContent('<div id="center"></div>');
     const settings = await fs.readFile(path.join(sourceRoot, "public", "home-settings.js"), "utf8");

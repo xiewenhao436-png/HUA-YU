@@ -22,7 +22,7 @@ try {
   const resource = (await client.request("resources/list")).resources[0];
   const html = (await client.request("resources/read", { uri: resource.uri })).contents[0].text;
   for (const width of [1100, 440]) {
-    const page = await browser.newPage({ viewport: { width, height: 820 } });
+    const page = await browser.newPage({ locale: "zh-CN", viewport: { width, height: 820 } });
     const errors = [];
     const network = [];
     page.on("pageerror", error => errors.push(error.message));

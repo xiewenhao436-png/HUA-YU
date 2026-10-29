@@ -28,7 +28,7 @@ try {
   const html = (await client.request("resources/read", { uri: resource.uri })).contents[0].text;
   const source = (await library({ action: "list" })).boards.find(b => b.threadId === "source-ui");
   for (const width of [1100, 440]) {
-    const page = await browser.newPage({ viewport: { width, height: 820 } });
+    const page = await browser.newPage({ locale: "zh-CN", viewport: { width, height: 820 } });
     const errors = []; page.on("pageerror", e => errors.push(e.message));
     const unbound = await call("open_canvas", { threadId: "target-ui" });
     const frame = await mountApp(page, client, { opened: unbound, html });

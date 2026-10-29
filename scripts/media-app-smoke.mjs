@@ -37,7 +37,7 @@ try {
     const c = await add("SC02A.png", 100, 420);
     const resource = (await client.request("resources/list")).resources[0];
     const html = (await client.request("resources/read", { uri: resource.uri })).contents[0].text;
-    const page = await browser.newPage({ viewport: { width, height: 820 } });
+    const page = await browser.newPage({ locale: "zh-CN", viewport: { width, height: 820 } });
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
     let holdImport = false;

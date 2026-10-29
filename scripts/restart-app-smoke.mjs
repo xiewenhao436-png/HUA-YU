@@ -32,7 +32,7 @@ try {
   const stopped = client;
   client = createMcpClient(pluginRoot, env);
   await stopped.close();
-  const page = await browser.newPage({ viewport: { width: 1000, height: 780 } });
+  const page = await browser.newPage({ locale: "zh-CN", viewport: { width: 1000, height: 780 } });
   const errors = [];
   page.on("pageerror", e => errors.push(e.message));
   const frame = await mountApp(page, adapter, { opened, html });
@@ -52,7 +52,7 @@ try {
 
   // A second chat has an independent MCP process and reuses persisted board data.
   const parallel = createMcpClient(pluginRoot, env);
-  const secondPage = await browser.newPage();
+  const secondPage = await browser.newPage({ locale: "zh-CN" });
   try {
     const second = await mountApp(secondPage, parallel, { opened, html });
     await second.waitForFunction(() => [...document.querySelectorAll("#objects img")].some(img => img.naturalWidth === 1), null, { timeout: 10000 });

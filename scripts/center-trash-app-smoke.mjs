@@ -53,7 +53,7 @@ try {
   const victim = boards.get("service");
   const board = (frame, id) => frame.locator(`.center-board-card[data-canvas-id="${id}"]`);
   for (const width of [1200, 440]) {
-    const page = await browser.newPage({ viewport: { width, height: 900 } });
+    const page = await browser.newPage({ locale: "zh-CN", viewport: { width, height: 900 } });
     const errors = []; page.on("pageerror", e => errors.push(e.message));
     const opened = await call("open_canvas", { threadId: "unbound-fixture-" + width });
     const frame = await mountApp(page, client, { opened, html });
@@ -82,7 +82,7 @@ try {
     await frame.locator('[data-center-view="all"]').click(); await frame.getByRole("searchbox", { name: "搜索画布" }).fill("canvas-center-trash-ui-");
     let peerPage, peerFrame;
     if (width === 1200) {
-      peerPage = await browser.newPage({ viewport: { width: 1000, height: 780 } });
+      peerPage = await browser.newPage({ locale: "zh-CN", viewport: { width: 1000, height: 780 } });
       peerFrame = await mountApp(peerPage, client, { opened: await call("canvas_library", { action: "open", boardId: victim.id }), html });
       await peerFrame.waitForFunction(() => document.querySelector("#canvasConnection").style.display === "none");
     }
@@ -154,7 +154,7 @@ try {
   const index = JSON.parse(await fs.readFile(env.CODEX_CANVAS_LIBRARY_PATH, "utf8"));
   index.tombstones.find(t => t.id === incomplete.id).purgeStartedAt = new Date().toISOString();
   await fs.writeFile(env.CODEX_CANVAS_LIBRARY_PATH, JSON.stringify(index));
-  const page = await browser.newPage({ viewport: { width: 1100, height: 820 } });
+  const page = await browser.newPage({ locale: "zh-CN", viewport: { width: 1100, height: 820 } });
   const frame = await mountApp(page, client, { opened: await call("open_canvas", { threadId: "incomplete-fixture" }), html });
   await frame.waitForSelector('[data-center-view="trash"]');
   await frame.locator('[data-center-view="trash"]').click();
