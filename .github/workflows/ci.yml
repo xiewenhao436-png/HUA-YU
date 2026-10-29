@@ -163,4 +163,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "画屿 $TAG" \
-            --notes "画屿本地无限画布。此版本已通过 Windows、macOS、Linux 的核心测试和 Chromium 侧栏测试。macOS 原生剪贴板与触控板体验仍待真机确认。安装与兼容说明请参阅仓库 README。"
+            --notes "修复了一些椅子问题，当牛做马更舒服了。"

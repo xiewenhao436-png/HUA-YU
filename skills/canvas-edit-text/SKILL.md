@@ -10,7 +10,7 @@ Use this skill when the user invokes Edit Text from 画屿 or asks to modify vis
 ## Behavior
 
 1. Treat the selected canvas image as the edit target.
-2. Before generating, identify the visible text in the image and write a formatted text inventory to the job output directory path supplied by 画屿.
+2. If 画屿 has already supplied a recognized text inventory or confirmed edit plan, use it directly without repeating recognition. Otherwise identify visible text and write the inventory to the supplied job output directory; finish recognition and let 画屿 wait locally for the user's edit plan.
 3. Use the user's Edit Text instruction as the primary edit instruction.
 4. Use imagegen once to create the edited image.
 5. Preserve non-text content, aspect ratio, composition, colors, perspective, typography style, and design intent.

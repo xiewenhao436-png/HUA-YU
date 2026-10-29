@@ -1,3 +1,6 @@
+import { dailyAppUpdateStatus } from "./update-check.mjs";
+import { updateApp } from "./updater.mjs";
+import { copyBoardToProject } from "./canvas-copy.mjs";
 import readline from "node:readline";
 import fs from "node:fs/promises";
 import crypto from "node:crypto";
@@ -11,7 +14,7 @@ import { pluginRoot, resolveProjectDir } from "./paths.mjs";
 import { canvasIdForThread, normalizeThreadId } from "./runtime.mjs";
 import { APP_VERSION } from "./version.mjs";
 import { createAppSession } from "./server.mjs";
-import { recordCanvas, listCanvases, knownBoard, localThreads, boardIdFor, boardScopeKey, assertBoardAvailable } from "./canvas-index.mjs";
+import { setBoardHidden, setProjectHidden, updateBoardMetadata, recordCanvas, listCanvases, knownBoard, localThreads, boardIdFor, boardScopeKey, assertBoardAvailable } from "./canvas-index.mjs";
 import { trashBoard, restoreBoard, permanentlyDeleteBoard, onBoardTrashed } from "./canvas-trash.mjs";
 import { CANVAS_LIBRARY_ACTIONS, browseBoard, libraryAsset, importBoardImages } from "./canvas-library.mjs";
 import { updateProjectMeta } from "./store.mjs";
@@ -101,7 +104,7 @@ async function handle(method, params) {
             action: { type: "string", enum: libraryActions },
             boardId: { type: "string" }, threadId: { type: "string" }, refresh: { type: "boolean" }, sessionId: { type: "string" },
             objectId: { type: "string" }, original: { type: "boolean" }, sourceBoardId: { type: "string" }, objectIds: { type: "array", items: { type: "string" } },
-            groupId: { type: "string" }, importedAt: { type: "string" }, offset: { type: "number" }, x: { type: "number" }, y: { type: "number" }, columns: { type: "number" }, confirmed: { type: "boolean" }
+            groupId: { type: "string" }, importedAt: { type: "string" }, offset: { type: "number" }, x: { type: "number" }, y: { type: "number" }, columns: { type: "number" }, confirmed: { type: "boolean" }, targetProject: { type: "string" }, displayTitle: { type: "string" }, importance: { type: "number" }, projectRoot: { type: "string" }, hidden: { type: "boolean" }
           } }
         },
         {
@@ -155,6 +158,12 @@ async function handle(method, params) {
               canvasId: { type: "string", description: "Explicit 画屿 canvas id. Overrides the canvas id derived from threadId." }
             }
           }
+        },
+        {
+          name: "project_references",
+          title: "查询项目五星画布",
+          description: "List five-star reference boards in the explicit project and their readable canvas objects. Call deliberately when project context is needed; this does not automatically inject context into sessions.",
+          inputSchema: { type: "object", required: ["projectDir"], properties: { projectDir: { type: "string", description: "Absolute workspace project path." }, limit: { type: "number", description: "Maximum objects per board, capped at 100." } } }
         },
         {
           name: "canvas_status",
@@ -296,8 +305,15 @@ async function handle(method, params) {
   if (method === "tools/call") {
     const args = params.arguments || {};
     if (params.name === "canvas_library") {
+      if (args.action === "app-update-status") return { content: [], structuredContent: await dailyAppUpdateStatus() };
+      if (args.action === "app-update-check") return { content: [], structuredContent: await dailyAppUpdateStatus({ force: true }) };
+      if (args.action === "app-update-run") return { content: [], structuredContent: await updateApp() };
+      if (["rename", "importance"].includes(args.action)) return { content: [], structuredContent: await updateBoardMetadata(args.boardId, args.action === "rename" ? { displayTitle: args.displayTitle } : { importance: args.importance }) };
+      if (args.action === "copy-board") return { content: [], structuredContent: await copyBoardToProject(args.boardId, args.targetProject) };
       if (args.action === "trash") return { content: [], structuredContent: await trashBoard(args.boardId) };
       if (args.action === "restore") return { content: [], structuredContent: await restoreBoard(args.boardId) };
+      if (args.action === "board-visibility") return { content: [], structuredContent: await setBoardHidden(args.boardId, args.hidden) };
+      if (args.action === "project-visibility") return { content: [], structuredContent: await setProjectHidden(args.projectRoot, args.hidden) };
       if (args.action === "delete-permanently") return { content: [], structuredContent: await permanentlyDeleteBoard(args.boardId, { confirmed: args.confirmed }) };
       if (["list", "bootstrap"].includes(args.action)) {
         const data = await listCanvases({ refresh: args.refresh === true });
@@ -376,6 +392,25 @@ async function handle(method, params) {
       const canvas = await resolveCanvasOptions(projectDir, args);
       const object = await addImage(projectDir, args, { canvasId: canvas.canvasId });
       return textResult(`已添加图片到画屿：${object.name}`, object);
+    }
+
+    if (params.name === "project_references") {
+      const projectDir = requireProjectDir(args);
+      const root = path.resolve(projectDir);
+      const data = await listCanvases();
+      const boards = data.boards.filter(board => {
+        if (board.importance !== 5) return false;
+        const relative = path.relative(root, path.resolve(board.projectDir));
+        return relative === "" || (relative.split(path.sep)[0] === "_codex" && !relative.startsWith(".."));
+      });
+      const references = [];
+      for (const board of boards) {
+        try {
+          const result = await searchObjects(board.projectDir, { canvasId: board.canvasId, limit: normalizeToolLimit(args.limit) });
+          references.push({ id: board.id, title: board.title, projectDir: board.projectDir, canvasId: board.canvasId, threadId: board.threadId || null, objects: result.results, objectLimit: normalizeToolLimit(args.limit) });
+        } catch (error) { references.push({ id: board.id, title: board.title, error: error.message }); }
+      }
+      return textResult(`找到 ${references.length} 个五星参考画布。`, { projectDir: root, boards: references });
     }
 
     if (params.name === "canvas_status") {

@@ -10,7 +10,7 @@ Use this skill when the user invokes Edit Elements from 画屿 or asks to separa
 ## Behavior
 
 1. Treat the selected canvas image as the source image to separate.
-2. Use imagegen once to create a low-detail instance segmentation map of the source image, not a finished artwork. Use `quality=low` when the imagegen surface exposes a quality setting.
+2. Use imagegen once to create a flat, low-detail instance segmentation map of the source image, not a finished artwork. Use the native tool's supported parameters only.
 3. The segmentation map must preserve the exact source aspect ratio.
 4. Use this exact visual prompt without adding object examples, category examples, palette examples, or case-specific rules: `对这张图进行实例分割，背景用纯洋红色 #ff00ff 表示。每个前景实例使用不同的纯色表示。完整物体作为一个实例，不要拆分物体内部部件。文字按视觉文本块作为独立实例保留。输出平涂分割图，不要渐变、阴影、纹理、图例或说明文字。`
 5. Only leave regions uncolored when they are true background or empty margin.

@@ -48,3 +48,5 @@ Use this skill to open the local 画屿 board and keep generated images collecte
 - Canvas data is stored under `<workspace>/canvas/`.
 - The default UI is a self-contained MCP App in the plugin sidebar. Its state, images, and actions use the app-only MCP transport; the local web service is a compatibility fallback.
 - The first milestone should preserve generated images as project assets, not only as chat attachments.
+
+- When a user asks to reuse project references, call `huayu.project_references` with the explicit workspace path. It returns five-star boards and bounded object details including image paths; inspect relevant content and images before applying them. This is an explicit lookup, not automatic context injection.

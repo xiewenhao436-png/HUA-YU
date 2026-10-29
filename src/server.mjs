@@ -1,3 +1,5 @@
+import { dailyAppUpdateStatus } from "./update-check.mjs";
+import { copyBoardToProject } from "./canvas-copy.mjs";
 import http from "node:http";
 import { Readable } from "node:stream";
 import fs from "node:fs/promises";
@@ -13,7 +15,7 @@ import { addImage, addObject, deleteObject, deleteObjects, ensureProjectStore, m
 import { canvasIdForThread, normalizeThreadId } from "./runtime.mjs";
 import { appUpdateStatus, updateApp } from "./updater.mjs";
 import { APP_VERSION } from "./version.mjs";
-import { recordCanvas, listCanvases, assertBoardAvailable, boardScopeKey } from "./canvas-index.mjs";
+import { setBoardHidden, setProjectHidden, updateBoardMetadata, recordCanvas, listCanvases, assertBoardAvailable, boardScopeKey } from "./canvas-index.mjs";
 import { trashBoard, restoreBoard, permanentlyDeleteBoard, onBoardTrashed } from "./canvas-trash.mjs";
 import { CANVAS_LIBRARY_ACTIONS, browseBoard, libraryAsset, importBoardImages } from "./canvas-library.mjs";
 
@@ -171,13 +173,13 @@ async function handleRequest(request, response, context) {
   }
 
   if (request.method === "GET" && pathname === "/api/app-update") {
-    return sendJson(response, 200, await appUpdateStatus({ checkRemote: false }));
+    return sendJson(response, 200, await dailyAppUpdateStatus());
   }
 
   if (request.method === "POST" && pathname === "/api/app-update/check") {
     requireLocalUpdateRequest(request, context.registry);
     await readJson(request, context.registry);
-    return sendJson(response, 200, await appUpdateStatus({ checkRemote: true }));
+    return sendJson(response, 200, await dailyAppUpdateStatus({ force: true }));
   }
 
   if (request.method === "POST" && pathname === "/api/app-update") {
@@ -230,8 +232,12 @@ async function handleRequest(request, response, context) {
   if (request.method === "POST" && pathname === "/api/library") {
     const body = await readJson(request, context.registry);
     if (["list", "bootstrap"].includes(body.action)) return sendJson(response, 200, { ...await listCanvases({ refresh: body.refresh === true }), libraryActions: browserLibraryActions });
+    if (body.action === "board-visibility") return sendJson(response, 200, await setBoardHidden(body.boardId, body.hidden));
+    if (body.action === "project-visibility") return sendJson(response, 200, await setProjectHidden(body.projectRoot, body.hidden));
     if (body.action === "trash") return sendJson(response, 200, await trashBoard(body.boardId));
     if (body.action === "restore") return sendJson(response, 200, await restoreBoard(body.boardId));
+    if (["rename", "importance"].includes(body.action)) return sendJson(response, 200, await updateBoardMetadata(body.boardId, body.action === "rename" ? { displayTitle: body.displayTitle } : { importance: body.importance }));
+    if (body.action === "copy-board") return sendJson(response, 200, await copyBoardToProject(body.boardId, body.targetProject));
     if (body.action === "delete-permanently") return sendJson(response, 200, await permanentlyDeleteBoard(body.boardId, { confirmed: body.confirmed }));
     if (body.action === "browse") return sendJson(response, 200, await browseBoard(body.boardId));
     if (body.action === "asset") return sendJson(response, 200, await libraryAsset(body.boardId, body.objectId, body.original === true));

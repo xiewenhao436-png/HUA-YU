@@ -1,7 +1,7 @@
 import { App } from "@modelcontextprotocol/ext-apps";
 import { showCanvasLauncher } from "../public/canvas-library.js";
 
-const newApp = () => new App({ name: "画屿", version: "0.1.0" }, { availableDisplayModes: ["fullscreen"] }, { autoResize: false });
+const newApp = () => new App({ name: "画屿", version: "0.2.0" }, { availableDisplayModes: ["fullscreen"] }, { autoResize: false });
 let app = newApp();
 let session;
 let started = false;

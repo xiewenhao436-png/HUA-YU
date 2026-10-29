@@ -67,7 +67,9 @@ test("new canvas center refuses unsupported deletion before calling an old MCP",
     const page = await browser.newPage();
     const errors = []; page.on("pageerror", error => errors.push(error.message));
     await page.setContent('<div id="center"></div>');
-    const source = await fs.readFile(path.join(sourceRoot, "public", "canvas-center.js"), "utf8");
+    const settings = await fs.readFile(path.join(sourceRoot, "public", "home-settings.js"), "utf8");
+    const settingsUrl = "data:text/javascript;base64," + Buffer.from(settings).toString("base64");
+    const source = (await fs.readFile(path.join(sourceRoot, "public", "canvas-center.js"), "utf8")).replace("./home-settings.js", settingsUrl);
     await page.evaluate(async moduleUrl => {
       const { showProjectCanvasCenter } = await import(moduleUrl);
       window.runtimeCalls = [];
@@ -84,6 +86,7 @@ test("new canvas center refuses unsupported deletion before calling an old MCP",
     const warning = page.locator(".center-runtime-notice");
     assert.equal(await warning.isVisible(), true);
     assert.match(await warning.textContent(), /完整退出并重新打开 Codex/);
+    await page.getByRole("searchbox", { name: "搜索画布" }).fill("fixture");
     await page.locator('[data-canvas-id="active-fixture"]').click({ button: "right" });
     const trash = page.getByRole("menuitem", { name: "移到回收站", exact: true });
     assert.equal(await trash.isDisabled(), true);
@@ -96,7 +99,7 @@ test("new canvas center refuses unsupported deletion before calling an old MCP",
       await item.dispatchEvent("click");
     }
     assert.equal(await page.locator(".center-confirm-dialog").evaluate(dialog => dialog.open), false);
-    assert.deepEqual(await page.evaluate(() => window.runtimeCalls.map(call => call.action)), ["bootstrap"], "No unsupported write may reach the MCP");
+    assert.deepEqual(await page.evaluate(() => window.runtimeCalls.filter(call => call.action !== "app-update-status").map(call => call.action)), ["bootstrap"], "No unsupported write may reach the MCP");
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

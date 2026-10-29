@@ -24,6 +24,7 @@ export function clearPublishedReleaseCacheForTest() {
 
 export async function appUpdateStatus({
   checkRemote = false,
+  forceRemote = false,
   rootDir = pluginRoot,
   sourceRoot = null,
   discoverInstall = true,
@@ -52,11 +53,12 @@ export async function appUpdateStatus({
     : installKindHint;
   let publishedRelease = null;
   let releaseError = null;
-  if (git.available) {
+  if (sourceInfo || runtimeInfo) {
     try {
       publishedRelease = await releaseProvider({
         repository: sourceInfo?.repository || runtimeInfo.repository,
         checkRemote,
+        forceRemote,
         timeoutMs: releaseCheckTimeoutMs
       });
     } catch (error) {
@@ -65,7 +67,7 @@ export async function appUpdateStatus({
   }
   const release = git.available && publishedRelease
     ? await publishedStableRelease({ git, rootDir: resolvedSourceRoot, publishedRelease })
-    : null;
+    : publishedRelease;
   const installedVersion = normalizeVersion(install?.version || runtimeInfo.pluginVersion || runtimeInfo.version);
   const sourceVersion = normalizeVersion(sourceInfo?.pluginVersion || sourceInfo?.version);
   const updateAvailable = Boolean(release && compareVersions(release.version, installedVersion) > 0);
@@ -121,6 +123,7 @@ export async function appUpdateStatus({
     sourceRoot: resolvedSourceRoot,
     releaseRelation,
     releaseError,
+    publishedRelease,
     git
   };
 }
@@ -397,14 +400,14 @@ async function publishedStableRelease({ git, rootDir, publishedRelease }) {
   };
 }
 
-async function githubReleaseProvider({ repository, checkRemote, timeoutMs = githubReleaseTimeoutMs }) {
+async function githubReleaseProvider({ repository, checkRemote, forceRemote = false, timeoutMs = githubReleaseTimeoutMs }) {
   if (!isReleaseRepository(repository)) throw new Error("画屿 updates must come from xiewenhao436-png/HUA-YU.");
   const slug = githubRepositorySlug(repository);
   if (!slug) throw new Error("画屿 repository is not a supported GitHub URL.");
 
   const cached = publishedReleaseCache.get(slug);
   if (!checkRemote) return cached?.release || null;
-  if (cached && Date.now() - cached.checkedAt < cached.ttlMs) return cached.release;
+  if (!forceRemote && cached && Date.now() - cached.checkedAt < cached.ttlMs) return cached.release;
 
   return withAbortTimeout(timeoutMs, async (signal) => {
     const response = await fetchTextResponse(`https://api.github.com/repos/${slug}/releases/latest`, {

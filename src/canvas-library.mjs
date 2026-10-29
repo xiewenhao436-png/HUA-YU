@@ -7,7 +7,7 @@ import { readState, addImagesBatch } from "./store.mjs";
 
 // One capability vocabulary for both transports. The browser omits MCP-only
 // opening/creation actions when advertising its subset.
-export const CANVAS_LIBRARY_ACTIONS = Object.freeze(["list", "bootstrap", "open", "create", "browse", "asset", "import", "import-status", "trash", "restore", "delete-permanently"]);
+export const CANVAS_LIBRARY_ACTIONS = Object.freeze(["app-update-status", "app-update-check", "app-update-run", "list", "bootstrap", "open", "create", "browse", "asset", "import", "import-status", "trash", "restore", "delete-permanently", "rename", "importance", "project-visibility", "board-visibility", "copy-board"]);
 
 const maxAssetBytes = 32 * 1024 * 1024;
 export async function browseBoard(boardId) {

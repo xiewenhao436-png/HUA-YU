@@ -1,6 +1,6 @@
 {
   "name": "huayu",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "画屿：面向分镜、图片与项目素材的本地画布工作台。",
   "type": "module",
   "homepage": "https://github.com/xiewenhao436-png/HUA-YU",
@@ -50,7 +50,8 @@
     "THIRD_PARTY_NOTICES.md",
     "LICENSES/",
     "UPSTREAM.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "public/home-settings.js"
   ],
   "scripts": {
     "setup:ocr": "node ./bin/huayu.mjs setup-ocr",
@@ -74,7 +75,7 @@
     "build:app": "node scripts/build-app.mjs",
     "test:app": "node --test scripts/mcp-app.test.mjs scripts/windows-path-alias.test.mjs",
     "smoke:app": "node scripts/visual-app-smoke.mjs",
-    "test:core": "npm run smoke && node --test scripts/mcp-app.test.mjs scripts/windows-path-alias.test.mjs scripts/canvas-library.test.mjs scripts/canvas-trash.test.mjs scripts/canvas-index-discovery.test.mjs",
+    "test:core": "npm run smoke && node --test scripts/mcp-app.test.mjs scripts/windows-path-alias.test.mjs scripts/canvas-library.test.mjs scripts/canvas-trash.test.mjs scripts/canvas-index-discovery.test.mjs scripts/codex-runner.test.mjs scripts/text-execution.test.mjs scripts/background-execution.test.mjs scripts/update-check.test.mjs",
     "test:ui": "node --test scripts/runtime-version.test.mjs && node scripts/visual-app-smoke.mjs && node scripts/center-trash-app-smoke.mjs && node scripts/library-app-smoke.mjs && node scripts/media-app-smoke.mjs && node scripts/restart-app-smoke.mjs && node scripts/project-switcher-app-smoke.mjs"
   },
   "keywords": [

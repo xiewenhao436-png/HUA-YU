@@ -3237,3 +3237,47 @@ button {
     padding: 5px;
   }
 }
+
+/* Canvas center: quiet editorial hierarchy with clear, accessible controls. */
+.center-main { background: #faf9f6; padding-top: 54px; }
+.center-heading { padding-bottom: 30px; border-bottom: 1px solid #e9e7e1; }
+.center-eyebrow { color: #8c8175; letter-spacing: 1.2px; }
+.center-heading h1 { font-size: clamp(28px, 3.2vw, 40px); font-weight: 600; letter-spacing: -1.4px; }
+.center-heading p { font-size: 13px; color: #85817b; }
+.center-button.center-primary { background: #242923; border-color: #242923; border-radius: 10px; padding: 10px 16px; }
+.center-tools { margin-top: 24px; }
+.center-search-wrap, .center-sort, .center-refresh { border-color: #e7e5df; border-radius: 10px; }
+.center-board-card { border-color: #e9e7e1; border-radius: 13px; }
+.center-card-preview { background: #f0efeb; }
+@media (prefers-reduced-motion: reduce) { .canvas-center *, .canvas-center *::before, .canvas-center *::after { transition-duration: 0s !important; animation-duration: 0s !important; } .center-board-card:hover { transform: none; } }
+
+/* Soft-light home, while project and search results remain scrollable. */
+.center-sidebar { background: #fbfaf9; border-color: #e5e2e1; }
+.center-brand { letter-spacing: 2px; }
+.center-nav.active { background: #ebe9ee; color: #48434f; }
+.center-main { position: relative; isolation: isolate; background: #f5f3f3; }
+.center-main::before, .center-main::after { content: ""; position: fixed; z-index: -1; width: 48%; height: 48%; border-radius: 50%; filter: blur(70px); opacity: .5; pointer-events: none; }
+.center-main::before { top: -12%; left: 20%; background: radial-gradient(ellipse,#e3d8e4,transparent 70%); animation: center-drift 15s ease-in-out infinite alternate; }
+.center-main::after { right: -12%; bottom: -20%; background: radial-gradient(ellipse,#d9e7e8,transparent 70%); animation: center-drift 19s ease-in-out infinite alternate-reverse; }
+@keyframes center-drift { to { transform: translate(40px,25px); } }
+.center-home { display: flex; flex-direction: column; justify-content: center; }
+.center-home .center-heading { width: min(620px,100%); justify-content: center; text-align: center; border: 0; padding: 0; }
+.center-home .center-eyebrow { color: #9b919f; letter-spacing: 4px; margin-bottom: 24px; }
+.center-home .center-heading h1 { font-size: clamp(26px,3vw,38px); letter-spacing: 4px; font-weight: 500; }
+.center-home .center-heading p { color: #77737e; margin: 16px 0 0; letter-spacing: 1px; }
+.center-home .center-tools { width: min(620px,100%); display: grid; grid-template-columns: 1fr auto auto; margin: 40px auto 0; gap: 12px; }
+.center-home .center-search-wrap { grid-column: 1 / -1; min-height: 60px; background: #ffffffc7; border-color: white; border-radius: 14px; box-shadow: 0 15px 45px #473d5314; padding: 0 20px; }
+.center-home .center-refresh { justify-self: end; }
+.center-home .center-button.center-primary { background: #655d70; border-color: #655d70; }
+.center-home .center-status:empty, .center-home .center-groups:empty { display: none; }
+@media (max-width: 700px) { .center-home .center-tools { grid-template-columns: minmax(0,1fr) auto auto; } .center-home .center-heading h1 { font-size: 26px; letter-spacing: 2px; } .center-home .center-tools { margin-top: 28px; gap: 6px; } .center-home .center-button, .center-home .center-sort { padding-left: 8px; padding-right: 8px; } }
+@media (prefers-reduced-motion: reduce) { .center-main::before, .center-main::after { animation: none; } }
+.center-home-settings { margin-top: auto; position: relative; padding-top: 20px; }
+.center-settings-panel { position: absolute; bottom: 48px; left: 0; width: min(290px, calc(100vw - 40px)); padding: 16px; border: 1px solid #e5e2e1; border-radius: 12px; background: #fff; box-shadow: 0 12px 38px #30284020; z-index: 20; text-align: left; }
+.center-settings-panel[hidden] { display: none; }
+.center-settings-panel select { width: 100%; padding: 8px; margin-bottom: 10px; }
+.center-settings-panel .center-button { width: 100%; white-space: normal; }
+.center-settings-panel p { font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.center-home-settings .update-available { color: #7056a5; }
+
+.settings-menu-row[hidden] { display: none; }

@@ -47,6 +47,15 @@ const maxWheelZoomDelta = 160;
 const wheelLinePixelSize = 16;
 const uploadMaxDisplaySize = 420;
 const searchDebounceMs = 180;
+const separateInstallButton = document.createElement('button');
+separateInstallButton.type = 'button'; separateInstallButton.className = 'settings-menu-row'; separateInstallButton.hidden = true;
+separateInstallButton.onclick = () => { if (!appUpdateBusy && appUpdateInfo?.canUpdate && appUpdateInfo?.updateAvailable) runAppUpdate(); };
+appUpdateButton?.after(separateInstallButton);
+const settingsReleaseLink = document.createElement('a'); settingsReleaseLink.className = 'settings-menu-row';
+settingsReleaseLink.target = '_blank'; settingsReleaseLink.rel = 'noopener noreferrer'; settingsReleaseLink.hidden = true;
+separateInstallButton.after(settingsReleaseLink);
+window.addEventListener('huayu-language-change', event => setLanguage(event.detail));
+
 const languageStorageKey = "codexCanvasLanguage";
 const toolColorStorageKey = "codexCanvasToolColor";
 const toolColors = ["#202124", "#d93025", "#f9ab00", "#188038", "#1a73e8", "#9334e6", "#ffffff"];
@@ -527,7 +536,7 @@ if (sidebar) sidebar.onAssetReady = (object, url) => {
 // a visible editor without its pointer and keyboard handlers.
 Promise.resolve().then(async () => { await loadProjects(); await loadState(); })
   .catch(() => showToast("画布加载失败，请重新打开画布。"));
-refreshAppUpdateStatus({ checkRemote: true }).catch(() => {});
+refreshAppUpdateStatus().catch(() => {});
 setInterval(() => { if (!sidebar || sidebar.active) loadState().catch(() => {}); }, 2000);
 
 projectTitle.addEventListener("keydown", (event) => {
@@ -577,11 +586,7 @@ settingsMenu.addEventListener("click", (event) => {
 appUpdateButton?.addEventListener("click", (event) => {
   event.preventDefault();
   if (appUpdateBusy) return;
-  if (appUpdateInfo?.canUpdate && appUpdateInfo?.updateAvailable) {
-    runAppUpdate();
-  } else {
-    refreshAppUpdateStatus({ checkRemote: true, showToastOnError: true });
-  }
+  refreshAppUpdateStatus({ checkRemote: true, showToastOnError: true });
 });
 
 toolDock.addEventListener("click", (event) => {
@@ -5275,6 +5280,7 @@ async function refreshAppUpdateStatus({ checkRemote = false, showToastOnError = 
     if (showToastOnError) showToast(error?.message || t("updateFailed"));
   } finally {
     appUpdateBusy = false;
+    separateInstallButton.disabled = false;
   }
 }
 
@@ -5297,11 +5303,20 @@ async function runAppUpdate() {
     showToast(error?.message || t("updateFailed"));
   } finally {
     appUpdateBusy = false;
+    separateInstallButton.disabled = false;
   }
 }
 
 function renderAppUpdateStatus(override = null) {
   renderSettingsUpdateIndicator();
+  separateInstallButton.hidden = !appUpdateInfo?.canUpdate || !appUpdateInfo?.updateAvailable;
+  separateInstallButton.disabled = appUpdateBusy;
+  separateInstallButton.textContent = language === 'zh' ? '安装更新' : 'Install update';
+  let releaseHref;
+  try { const url = new URL(appUpdateInfo?.releaseUrl); if (url.protocol === 'https:') releaseHref = url.href; } catch {}
+  settingsReleaseLink.hidden = !appUpdateInfo?.updateAvailable || !releaseHref;
+  settingsReleaseLink.href = releaseHref || '#';
+  settingsReleaseLink.textContent = language === 'zh' ? '查看发布页' : 'View release';
   if (!appUpdateButton || !appVersionValue || !appUpdateStatus) return;
   const version = appUpdateInfo?.installedVersion || appUpdateInfo?.pluginVersion || appUpdateInfo?.version || "...";
   appVersionValue.textContent = version;
@@ -5321,8 +5336,20 @@ function renderAppUpdateStatus(override = null) {
     return;
   }
 
+  if (appUpdateInfo.dailyCheck?.error) {
+    appUpdateStatus.textContent = t('updateUnavailable');
+    return;
+  }
+  if (!appUpdateInfo.latestVersion) {
+    appUpdateStatus.textContent = t('updateUnavailable');
+    return;
+  }
+  if (!appUpdateInfo.updateAvailable) {
+    appUpdateStatus.textContent = t('updateCurrent');
+    return;
+  }
   if (!appUpdateInfo.canUpdate) {
-    appUpdateStatus.textContent = appUpdateBlockedLabel(appUpdateInfo.blockedReason);
+    appUpdateStatus.textContent = (appUpdateInfo.updateAvailable ? t('updateAvailable') + ' · ' : '') + appUpdateBlockedLabel(appUpdateInfo.blockedReason);
     appUpdateButton.title = appUpdateInfo.blockedMessage || "";
     appUpdateButton.setAttribute("aria-label", `${t("appVersion")}: ${version}, ${appUpdateStatus.textContent}`);
     return;

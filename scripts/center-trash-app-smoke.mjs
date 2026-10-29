@@ -57,6 +57,7 @@ try {
     const errors = []; page.on("pageerror", e => errors.push(e.message));
     const opened = await call("open_canvas", { threadId: "unbound-fixture-" + width });
     const frame = await mountApp(page, client, { opened, html });
+    await frame.getByRole("searchbox", { name: "搜索画布" }).fill("canvas-center-trash-ui-");
     await frame.waitForFunction(() => document.querySelectorAll(".center-board-card").length === 6);
     assert.equal(await frame.locator("[data-project-group]").count(), 2);
     for (const preview of await frame.locator("[data-preview-board]").all()) {
@@ -78,7 +79,7 @@ try {
     await frame.getByRole("combobox", { name: "画布排序" }).selectOption("name");
     const names = await frame.locator(".center-board-card h3").allTextContents();
     assert.deepEqual(names, [...names].sort((a,b) => a.localeCompare(b,"zh-CN")));
-    await frame.locator('[data-center-view="all"]').click();
+    await frame.locator('[data-center-view="all"]').click(); await frame.getByRole("searchbox", { name: "搜索画布" }).fill("canvas-center-trash-ui-");
     let peerPage, peerFrame;
     if (width === 1200) {
       peerPage = await browser.newPage({ viewport: { width: 1000, height: 780 } });
@@ -90,11 +91,13 @@ try {
     await frame.waitForFunction(() => document.querySelectorAll(".center-board-card").length === 5);
     if (peerFrame) {
       await peerFrame.evaluate(() => window.codexCanvasApp.fetch("/api/state").catch(() => {}));
+      await peerFrame.getByRole("searchbox", { name: "搜索画布" }).fill("canvas-center-trash-ui-");
       await peerFrame.waitForFunction(() => window.codexCanvasApp.inLauncher && document.querySelectorAll(".center-board-card").length === 5);
       await peerPage.close();
     }
     await fs.access(path.join(victim.projectDir, "canvas"));
     await frame.locator(".center-toast").getByRole("button", { name: "撤销", exact: true }).click();
+    await frame.getByRole("searchbox", { name: "搜索画布" }).fill("canvas-center-trash-ui-");
     await frame.waitForFunction(() => document.querySelectorAll(".center-board-card").length === 6);
     await board(frame, victim.id).getByRole("button", { name: /画布操作/ }).click();
     await frame.getByRole("menuitem", { name: "移到回收站", exact: true }).click();
@@ -114,16 +117,17 @@ try {
     await board(frame, victim.id).click({ button: "right" });
     await frame.getByRole("menuitem", { name: "恢复画布", exact: true }).click();
     await frame.waitForFunction(() => document.querySelectorAll(".center-board-card").length === 0);
-    await frame.locator('[data-center-view="all"]').click();
+    await frame.locator('[data-center-view="all"]').click(); await frame.getByRole("searchbox", { name: "搜索画布" }).fill("canvas-center-trash-ui-");
     assert.equal(await frame.locator(".center-board-card").count(), 6);
     // Direct open, explicit home and re-entry should retain controls, not grow listeners.
     await board(frame, victim.id).locator("[data-board-id]").click();
     await frame.waitForFunction(() => document.querySelector("#canvasConnection").style.display === "none" && document.querySelector("#objects img")?.naturalWidth === 480);
     await frame.locator(".project-header > button").first().click();
     await frame.locator("[data-canvas-home]").click();
+    await frame.getByRole("searchbox", { name: "搜索画布" }).fill("canvas-center-trash-ui-");
     await frame.waitForFunction(() => document.querySelectorAll(".center-board-card").length === 6);
     await frame.locator('[data-center-view="trash"]').click();
-    await frame.locator('[data-center-view="all"]').click();
+    await frame.locator('[data-center-view="all"]').click(); await frame.getByRole("searchbox", { name: "搜索画布" }).fill("canvas-center-trash-ui-");
     assert.equal(await frame.locator(".center-board-card").count(), 6);
     if (width === 440) {
       await board(frame, victim.id).click({ button: "right" });

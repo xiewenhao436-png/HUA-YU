@@ -17,7 +17,7 @@ export async function readLibraryIndex() {
   try { data = JSON.parse(await fs.readFile(libraryPath(), "utf8")); }
   catch (error) { if (error.code !== "ENOENT") throw error; data = {}; }
   return { version: 2, boards: Array.isArray(data.boards) ? data.boards.filter(b => b && path.isAbsolute(b.projectDir || "")) : [],
-    tombstones: Array.isArray(data.tombstones) ? data.tombstones : [], lastByThread: data.lastByThread || {} };
+    tombstones: Array.isArray(data.tombstones) ? data.tombstones : [], hiddenProjects: Array.isArray(data.hiddenProjects) ? data.hiddenProjects : [], hiddenBoards: Array.isArray(data.hiddenBoards) ? data.hiddenBoards : [], lastByThread: data.lastByThread || {} };
 }
 export function updateLibraryIndex(change) {
   const task = writeQueue.catch(() => {}).then(async () => {
@@ -138,7 +138,7 @@ async function boardSummary(board, titles) {
     const state = await readJson(file, null);
     if (!Array.isArray(state?.objects)) return null;
     const images = state.objects.filter(o => (o.type || "image") === "image" && o.src);
-    return { ...board, title: state.title || board.title || path.basename(board.projectDir), threadTitle: titles.get(board.threadId)?.title || board.threadTitle || "",
+    return { ...board, title: board.displayTitle || state.title || board.title || path.basename(board.projectDir), threadTitle: titles.get(board.threadId)?.title || board.threadTitle || "",
       imageCount: images.length, updatedAt: stat.mtime.toISOString(), coverId: images[0]?.id || null };
   } catch { return null; }
 }
@@ -190,11 +190,38 @@ export async function listCanvases({ refresh = false } = {}) {
   boards = boards.filter(b => !latest.tombstones.some(t => t.scopeKey === b.scopeKey));
   const trash = latest.tombstones.filter(t => !t.purgedAt).map(t => ({ ...t.board, id: t.id, trashedAt: t.trashedAt,
     ...(t.purgeStartedAt ? { purgeStartedAt: t.purgeStartedAt, canRestore: false } : { canRestore: true }) }));
-  return { boards, trash, threads, lastByThread: latest.lastByThread };
+  return { boards, trash, threads, hiddenProjects: latest.hiddenProjects, hiddenBoards: latest.hiddenBoards, lastByThread: latest.lastByThread };
 }
 export async function knownBoard(id) {
   const data = await listCanvases();
   const board = data.boards.find(b => b.id === id);
   if (!board) throw new Error("画布不存在或素材目录已移动，请刷新画布列表。");
   return board;
+}
+
+export async function updateBoardMetadata(id, { displayTitle, importance } = {}) {
+  const board = await knownBoard(id);
+  if (displayTitle !== undefined && (typeof displayTitle !== "string" || !displayTitle.trim() || displayTitle.trim().length > 200)) throw new Error("请输入 1 至 200 个字符的画布名称。");
+  if (importance !== undefined && (!Number.isInteger(importance) || importance < 0 || importance > 5)) throw new Error("重要度须为 0 至 5 星。");
+  await updateLibraryIndex(data => {
+    if (data.tombstones.some(t => t.scopeKey === board.scopeKey)) throw new Error("画布已移入回收站。");
+    let entry = data.boards.find(b => b.id === id);
+    if (!entry) { entry = { ...board }; data.boards.push(entry); }
+    if (displayTitle !== undefined) entry.displayTitle = displayTitle.trim();
+    if (importance !== undefined) entry.importance = importance;
+  });
+  return { id };
+}
+
+export async function setProjectHidden(root, hidden) {
+  if (typeof root !== "string" || !root || root.length > 4000 || typeof hidden !== "boolean") throw new Error("项目参数无效。");
+  await updateLibraryIndex(data => { data.hiddenProjects = data.hiddenProjects.filter(x => x !== root); if (hidden) data.hiddenProjects.push(root); });
+  return { root, hidden };
+}
+
+export async function setBoardHidden(id, hidden) {
+  if (typeof id !== "string" || !id || typeof hidden !== "boolean") throw new Error("画布参数无效。");
+  await knownBoard(id);
+  await updateLibraryIndex(data => { data.hiddenBoards = data.hiddenBoards.filter(x => x !== id); if (hidden) data.hiddenBoards.push(id); });
+  return { id, hidden };
 }

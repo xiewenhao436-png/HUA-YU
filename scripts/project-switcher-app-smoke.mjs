@@ -69,6 +69,9 @@ try {
     await frame.locator("#objects .canvas-object").first().click();
     await frame.locator(".project-header > button").first().click();
     await frame.locator("[data-canvas-home]").click();
+    await frame.getByRole("searchbox", { name: "搜索画布" }).waitFor();
+    assert.equal(await frame.locator("#canvasConnection .center-board-card").count(), 0, "The new home starts without a board list");
+    await frame.getByRole("searchbox", { name: "搜索画布" }).fill("canvas-project-switcher-");
     await frame.waitForSelector("#canvasConnection .library-launcher-list [data-board-id]");
     assert.equal(await frame.locator("#canvasConnection .library-launcher-list [data-board-id]").count(), 4);
     assert.equal(await frame.evaluate(() => window.codexCanvasApp.inLauncher && !window.codexCanvasApp.active && document.querySelector(".app-shell").inert), true);
