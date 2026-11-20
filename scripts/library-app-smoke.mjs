@@ -36,7 +36,14 @@ try {
       await frame.getByRole("button", { name: "新建画布", exact: true }).click();
       await frame.waitForSelector(".library-thread-select");
       await frame.locator(".library-thread-select").selectOption("target-ui");
+      const dialog = frame.getByRole("dialog", { name: "新建画布" });
+      assert.equal(await dialog.getByLabel("画布名称").inputValue(), "当前策划项目");
+      await dialog.getByLabel("画布名称").fill("策划分镜收集");
+      await dialog.getByLabel("所属项目").fill("服务短视频");
       await frame.getByRole("button", { name: "创建画布", exact: true }).click();
+      await frame.waitForFunction(() => document.querySelector("#projectTitle")?.value === "策划分镜收集");
+      const target = (await library({ action: "list" })).boards.find(b => b.threadId === "target-ui");
+      assert.equal(target.projectName, "服务短视频");
     }
     await frame.waitForSelector("#canvasImportButton");
     await frame.waitForFunction(() => document.querySelector("#canvasConnection").style.display === "none");
@@ -53,7 +60,8 @@ try {
     const countBefore = width === 1100 ? 0 : 7;
     assert.equal(await frame.locator("#objects .canvas-object").count(), countBefore + 2);
     const group = frame.locator(".canvas-import-frame").last();
-    assert.match(await group.textContent(), /整理服务短视频参考 · 2 张/);
+    assert.match(await group.textContent(), new RegExp(`整理服务短视频参考 · ${countBefore + 2} 张`));
+    await frame.locator('[data-minimap="fit"]').click();
     const groupBefore = await group.getAttribute("style");
     const label = group.locator("button");
     const labelBox = await label.boundingBox();

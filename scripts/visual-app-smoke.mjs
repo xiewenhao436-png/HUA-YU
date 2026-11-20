@@ -74,7 +74,23 @@ try {
     await frame.waitForFunction(() => [...document.querySelectorAll("#objects img")].every(img => img.complete && img.naturalWidth > 0));
     await frame.waitForFunction(() => document.querySelector("#objects img")?.naturalWidth === 320);
     const image = frame.locator("#objects img").first();
+    const map = frame.locator("#canvasMinimap canvas");
+    await map.waitFor({ state: "visible" });
+    const boxOnScreen = await map.boundingBox();
+    const dock = await frame.locator(".tool-dock").boundingBox();
+    assert.ok(boxOnScreen.x + boxOnScreen.width <= dock.x || boxOnScreen.y + boxOnScreen.height <= dock.y, "The minimap leaves the tool dock accessible");
+    assert.match(await frame.locator("#board").evaluate(element => getComputedStyle(element).backgroundImage), /linear-gradient/);
     if (width === 1100) {
+      const beforeMapPan = await frame.locator("#world").evaluate(element => element.style.transform);
+      await map.click({ position: { x: 18, y: 18 } });
+      assert.notEqual(await frame.locator("#world").evaluate(element => element.style.transform), beforeMapPan, "Minimap click moves the camera");
+      const beforeMapZoom = await frame.locator("#zoomLabel").textContent();
+      await map.hover();
+      await page.mouse.wheel(0, -100);
+      await frame.waitForFunction(before => document.querySelector("#zoomLabel").textContent !== before, beforeMapZoom);
+      await frame.locator('[data-minimap="fit"]').click();
+      const fitted = await image.boundingBox();
+      assert.ok(fitted.x >= 0 && fitted.y >= 0 && fitted.x + fitted.width <= width && fitted.y + fitted.height <= 820, "Fit displays the complete image");
       await frame.locator('.tool-dock [data-view-action="reset"]').click();
       await frame.evaluate(() => document.querySelector("#board").dispatchEvent(new KeyboardEvent("keydown", {key:" ",code:"Space",bubbles:true})));
       await frame.locator('[data-tool="select"]').click();

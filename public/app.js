@@ -1,8 +1,10 @@
 import { CanvasHistory } from "./canvas-history.js";
 import { sidebar, canvasOrigin, canvasFetch as fetch, preferences } from "./canvas-transport.js";
 import { installCanvasMedia } from "./canvas-media.js";
-import { installCanvasLibrary, selectProjectCanvases } from "./canvas-library.js";
+import { groupedCanvasSwitcher, installCanvasLibrary } from "./canvas-library.js";
+import { canvasName } from "./canvas-center.js";
 import { createImportFrames } from "./canvas-import-frames.js";
+import { installCanvasMinimap } from "./canvas-minimap.js";
 let importFrames = null;
 
 const board = document.querySelector("#board");
@@ -34,6 +36,8 @@ const quickEditMarkupControls = document.querySelector("#quickEditMarkupControls
 const quickEditColorPalette = document.querySelector("#quickEditColorPalette");
 const quickEditHint = document.querySelector("#quickEditHint");
 const zoomLabel = document.querySelector("#zoomLabel");
+const minCanvasZoom = 0.0001;
+const maxCanvasZoom = 2.2;
 const toast = document.querySelector("#toast");
 const toolDock = document.querySelector(".tool-dock");
 const undoButton = document.querySelector('[data-history-action="undo"]');
@@ -452,6 +456,29 @@ const singleSelectionActions = new Set([
 
 initLayerBrowserUi();
 initPromptHistoryUi();
+const minimap = installCanvasMinimap({
+  panel: document.querySelector("#canvasMinimap"),
+  board,
+  objects: () => state?.objects || [],
+  camera: () => viewport,
+  navigate: (center, zoom) => {
+    viewport.zoom = clamp(zoom, minCanvasZoom, maxCanvasZoom);
+    viewport.x = board.clientWidth / 2 - center.x * viewport.zoom;
+    viewport.y = board.clientHeight / 2 - center.y * viewport.zoom;
+    applyViewport();
+    updateSelectionUi();
+    scheduleViewportSave();
+  },
+  fit: () => {
+    if (!state?.objects.length) return;
+    const frames = [...objectLayer.querySelectorAll(".canvas-import-frame")].map(frame => ({
+      x: frame.offsetLeft, y: frame.offsetTop, width: frame.offsetWidth, height: frame.offsetHeight
+    }));
+    frameWorldBounds(boundsForObjects([...state.objects, ...frames]), {
+      paddingX: 40, paddingTop: 88, paddingBottom: 76, minZoom: minCanvasZoom
+    });
+  }
+});
 applyLanguage();
 setActiveTool(defaultCanvasTool);
 const canvasMedia = installCanvasMedia({
@@ -460,6 +487,7 @@ const canvasMedia = installCanvasMedia({
   objects: () => state?.objects || [],
   selection: () => [...selectedIds],
   ready: () => Boolean(state) && !canvasLibrary.active && !sidebar?.inLauncher,
+  scope: currentCanvasScopeMeta,
   editable: isEditableTarget,
   imageCandidate: isUploadImageCandidate,
   point: pointerToWorld,
@@ -545,7 +573,7 @@ projectTitle.addEventListener("keydown", (event) => {
     projectTitle.blur();
   }
   if (event.key === "Escape") {
-    projectTitle.value = state?.title || "Untitled";
+    projectTitle.value = canvasName(state);
     projectTitle.blur();
   }
 });
@@ -894,7 +922,7 @@ board.addEventListener("wheel", (event) => {
     const before = screenToWorld(event.clientX - rect.left, event.clientY - rect.top);
     const zoomDelta = clamp(delta.y, -maxWheelZoomDelta, maxWheelZoomDelta);
     const factor = Math.exp(-zoomDelta * zoomWheelSensitivity);
-    viewport.zoom = clamp(viewport.zoom * factor, 0.12, 2.2);
+    viewport.zoom = clamp(viewport.zoom * factor, minCanvasZoom, maxCanvasZoom);
     viewport.x = event.clientX - rect.left - before.x * viewport.zoom;
     viewport.y = event.clientY - rect.top - before.y * viewport.zoom;
   } else {
@@ -1667,6 +1695,11 @@ async function loadStateOnce() {
     ? nextState.objects.filter((object) => !previousObjectIds.has(object.id))
     : [];
   const autoFocusObject = suppressNextAutoFocus ? null : autoFocusObjectForStateUpdate(nextState, addedObjects);
+  const savedView = nextState.viewport;
+  const initialImageGroup = !state && board.clientWidth < board.clientHeight &&
+    savedView?.x === 0 && savedView?.y === 0 && savedView?.zoom === 0.72
+    ? nextState.objects.find(object => object.autoImageGroup?.blockId)
+    : null;
   suppressNextAutoFocus = false;
 
   state = nextState;
@@ -1684,7 +1717,11 @@ async function loadStateOnce() {
   }
   state.selection = selectedId;
   render();
-  if (autoFocusObject) frameCanvasObject(autoFocusObject);
+  if (autoFocusObject) {
+    if (!frameAutomaticImageGroup(autoFocusObject)) frameCanvasObject(autoFocusObject);
+  } else if (initialImageGroup) {
+    frameAutomaticImageGroup(initialImageGroup);
+  }
 }
 
 function autoFocusObjectForStateUpdate(nextState, addedObjects) {
@@ -1707,7 +1744,7 @@ async function loadProjects() {
   ]);
   if (sidebar && sidebar.scope !== scope) return;
   registeredProjects = Array.isArray(payload.projects) ? payload.projects : [];
-  if (sidebar) projectCanvases = library ? selectProjectCanvases(library, scope) : null;
+  if (sidebar) projectCanvases = library ? groupedCanvasSwitcher(library, scope) : null;
   if (!currentProjectId && registeredProjects.length > 0) {
     currentProjectId = registeredProjects[0].id;
     const url = new URL(window.location.href);
@@ -1741,21 +1778,32 @@ function renderProjectMenu() {
 
   if (sidebar) {
     if (projectCanvases) {
-      const context = document.createElement("div"); context.className = "project-menu-context";
-      context.textContent = `${basename(projectCanvases.root)} · ${projectCanvases.boards.length} 个画布`;
-      context.title = projectCanvases.root; projectMenu.append(context);
       const list = document.createElement("div"); list.className = "project-menu-list";
-      for (const canvas of projectCanvases.boards) {
-        const button = document.createElement("button"); button.type = "button"; button.dataset.boardId = canvas.id;
-        button.className = "project-canvas-entry" + (canvas.current ? " active" : "");
-        button.setAttribute("aria-current", canvas.current ? "page" : "false");
-        const name = document.createElement("span"); name.className = "project-menu-name";
-        name.textContent = canvas.title || canvas.threadTitle || "未命名画布"; button.title = name.textContent;
-        const meta = document.createElement("span"); meta.className = "project-menu-path";
-        meta.textContent = `${canvas.imageCount || 0} 张图片${canvas.threadTitle ? " · " + canvas.threadTitle : ""}`;
-        button.append(name, meta);
-        if (canvas.current) { const badge = document.createElement("span"); badge.className = "project-menu-current"; badge.textContent = "当前"; button.append(badge); }
-        button.onclick = () => switchCanvas(canvas).catch(error => showToast(error.message)); list.append(button);
+      for (const group of projectCanvases) {
+        const section = document.createElement("details"); section.className = "project-menu-group";
+        section.open = group.boards.some(canvas => canvas.current);
+        const label = document.createElement("summary"); label.className = "project-menu-context"; label.textContent = group.name;
+        const entries = document.createElement("div"); entries.className = "project-menu-boards";
+        section.append(label, entries); list.append(section);
+        const counts = new Map();
+        for (const canvas of group.boards) {
+          const name = canvasName(canvas);
+          counts.set(name, (counts.get(name) || 0) + 1);
+        }
+        for (const canvas of group.boards) {
+          const button = document.createElement("button"); button.type = "button"; button.dataset.boardId = canvas.id;
+          button.className = "project-canvas-entry" + (canvas.current ? " active" : "");
+          button.setAttribute("aria-current", canvas.current ? "page" : "false");
+          const name = document.createElement("span"); name.className = "project-menu-name";
+          name.textContent = canvasName(canvas); button.title = name.textContent;
+          button.append(name);
+          if (counts.get(name.textContent) > 1) {
+            const count = document.createElement("span"); count.className = "project-menu-sub";
+            count.textContent = `${canvas.imageCount || 0} 张图片`; button.append(count);
+          }
+          if (canvas.current) { const badge = document.createElement("span"); badge.className = "project-menu-current"; badge.textContent = "当前"; button.append(badge); }
+          button.onclick = () => switchCanvas(canvas).catch(error => showToast(error.message)); entries.append(button);
+        }
       }
       projectMenu.append(list);
     } else {
@@ -1777,7 +1825,7 @@ function renderProjectMenu() {
 
     const name = document.createElement("span");
     name.className = "project-menu-name";
-    name.textContent = project.title || basename(project.projectDir) || project.id;
+    name.textContent = canvasName({ title: project.title, threadTitle: basename(project.projectDir) || project.id });
     button.append(name);
 
     const pathLabel = document.createElement("span");
@@ -2040,7 +2088,7 @@ function searchResultSnippet(result) {
 
 function render() {
   if (document.activeElement !== projectTitle) {
-    projectTitle.value = state.title || "Untitled";
+    projectTitle.value = canvasName(state);
   }
   objectLayer.replaceChildren();
   emptyState.hidden = state.objects.length > 0;
@@ -2897,6 +2945,8 @@ function moveDrag(event) {
   updateLayerGroupSelectionElement(drag.groupId || selectedLayerGroupId());
   updateVersionDiffOverlayElement();
   updateExpandPreviewElement();
+  importFrames?.update();
+  minimap.update();
   updateSelectionUi();
 }
 
@@ -3025,6 +3075,8 @@ function moveResize(event) {
     resize.element.style.width = `${object.width}px`;
     resize.element.style.height = `${object.height}px`;
   }
+  importFrames?.update();
+  minimap.update();
   updateSelectionUi();
 }
 
@@ -3488,7 +3540,6 @@ function rectsIntersect(a, object) {
 }
 
 function updateSelectionUi() {
-  importFrames?.update();
   if (!state) { hideSelectionToolbar(); return; }
   const object = state.objects.find((item) => item.id === selectedId);
   const groupId = selectedLayerGroupId();
@@ -4252,9 +4303,7 @@ function uploadImageFiles(files, options = {}) {
   const targetSession = sidebar?.scope?.sessionId;
   const requestPath = apiPath("/api/images");
   const selectionBefore = captureSelectionSnapshot();
-  const rect = board.getBoundingClientRect();
-  const center = options.point || screenToWorld(rect.width / 2, rect.height / 2);
-  const columns = Math.max(1, Math.min(Math.ceil(Math.sqrt(files.length)), Math.floor((rect.width - 64) / ((uploadMaxDisplaySize + 32) * viewport.zoom))));
+  const batchId = newImageGroupId("upload");
   const stillCurrent = () => state === targetState && targetSession === sidebar?.scope?.sessionId;
   return canvasHistory.commit(async () => {
     let lastObject = null;
@@ -4262,18 +4311,13 @@ function uploadImageFiles(files, options = {}) {
     let failed = 0;
     const entries = [];
 
-    for (const [index, file] of files.entries()) {
+    for (const file of files) {
       if (!stillCurrent()) break;
       try {
         const dataUrl = await readFileAsDataUrl(file);
         const naturalSize = await readImageFileSize(dataUrl);
         const displaySize = displaySizeForUpload(naturalSize);
         if (!stillCurrent()) break;
-        const position = {
-          x: Math.round(center.x - displaySize.width / 2 + ((index % columns) - (columns - 1) / 2) * (uploadMaxDisplaySize + 32)),
-          y: Math.round(center.y - displaySize.height / 2 + Math.floor(index / columns) * (uploadMaxDisplaySize + 32))
-        };
-
         const response = await fetch(requestPath, {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -4281,10 +4325,12 @@ function uploadImageFiles(files, options = {}) {
             dataUrl,
             name: file.name,
             prompt: "",
-            batchId: null,
-            layoutMode: "manual",
-            x: position.x,
-            y: position.y,
+            batchId,
+            autoGroupTitle: language === "zh" ? "上传图片" : "Uploaded images",
+            autoPosition: options.point && {
+              x: Math.round(options.point.x - displaySize.width / 2),
+              y: Math.round(options.point.y - displaySize.height / 2)
+            },
             width: displaySize.width,
             height: displaySize.height
           }, scopeMeta))
@@ -4306,6 +4352,11 @@ function uploadImageFiles(files, options = {}) {
       setLocalSelection(entries.map(entry => entry.object.id), { fromUser: true });
       refreshKnownObjectIds();
       render();
+      if (!options.point && !frameAutomaticImageGroup(entries[0].object)) {
+        frameWorldBounds(boundsForObjects(entries.slice(0, 4).map(entry => entry.object)), {
+          paddingX: 40, paddingTop: 110, paddingBottom: 90
+        });
+      }
     }
 
     if (lastError) showToast(`${entries.length} 张已导入，${failed} 张失败：${lastError?.message || t("uploadFailed")}`);
@@ -4334,10 +4385,8 @@ async function libraryRequest(args) {
 function importFromOtherCanvas({ source, ids, cancelled, progress }) {
   const targetState = state, targetSession = sidebar?.scope?.sessionId, scopeMeta = currentCanvasScopeMeta();
   const selectionBefore = captureSelectionSnapshot();
-  const groupId = `import_${Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("")}`;
+  const groupId = newImageGroupId("import");
   const importedAt = new Date().toISOString();
-  const occupied = (state?.objects || []).filter(o => Number.isFinite(o.x + o.width));
-  const origin = occupied.length ? { x: Math.max(...occupied.map(o => o.x + o.width)) + 140, y: Math.min(...occupied.map(o => o.y)) } : { x: 120, y: 160 };
   const stillCurrent = () => state === targetState && targetSession === sidebar?.scope?.sessionId;
   return canvasHistory.commit(async () => {
     const entries = []; let errors = 0, done = 0;
@@ -4351,7 +4400,7 @@ function importFromOtherCanvas({ source, ids, cancelled, progress }) {
       const part = ids.slice(offset, offset + 4);
       progress(`正在导入 ${offset + 1}–${Math.min(offset + part.length, ids.length)} / ${ids.length} 张…`);
       try {
-        const result = await libraryRequest({ action: "import", sessionId: targetSession, sourceBoardId: source.id, objectIds: part, groupId, importedAt, offset, ...origin });
+        const result = await libraryRequest({ action: "import", sessionId: targetSession, sourceBoardId: source.id, objectIds: part, groupId, importedAt, offset });
         accept(result.objects.map((object, index) => ({ object, index: targetState.objects.length + index })));
         errors += result.errors.length; done += part.length;
         if (stillCurrent()) { refreshKnownObjectIds(); render(); prepareCanvasAssets(state.objects); }
@@ -4363,11 +4412,18 @@ function importFromOtherCanvas({ source, ids, cancelled, progress }) {
     const importedIds = entries.map(e => e.object.id);
     setLocalSelection(importedIds, { fromUser: true }); refreshKnownObjectIds(); render();
     await prepareCanvasAssets(state.objects);
-    if (entries.length) frameWorldBounds(boundsForObjects(entries.slice(0, 4).map(e => e.object)), { paddingX: 80, paddingTop: 120, paddingBottom: 120, minZoom: .12, maxZoom: 1 });
+    if (entries.length && !frameAutomaticImageGroup(entries[0].object)) {
+      frameWorldBounds(boundsForObjects(entries.slice(0, 4).map(e => e.object)), { paddingX: 80, paddingTop: 120, paddingBottom: 120, minZoom: .12, maxZoom: 1 });
+    }
     return { value: { count: entries.length, errors: Math.max(errors, done - entries.length) }, action: entries.length ? {
       type: "create", entries, selectionBefore, selectionAfter: selectionSnapshotForIds(importedIds), scopeMeta
     } : null };
   }).finally(() => { if (stillCurrent()) loadState().catch(() => {}); });
+}
+
+function newImageGroupId(prefix) {
+  const suffix = Array.from(crypto.getRandomValues(new Uint8Array(16)), value => value.toString(16).padStart(2, "0")).join("");
+  return `${prefix}_${suffix}`;
 }
 
 async function pasteTextCard(text) {
@@ -4924,6 +4980,8 @@ function restoreExpandPreviewSource() {
     element.style.left = `${object.x}px`;
     element.style.top = `${object.y}px`;
   }
+  importFrames?.update();
+  minimap.update();
 }
 
 function updateExpandPreview() {
@@ -5394,6 +5452,7 @@ function appUpdateBlockedLabel(reason) {
 
 function applyLanguage() {
   document.documentElement.lang = language === "zh" ? "zh-CN" : "en";
+  minimap.translate(language);
   document.querySelectorAll("[data-i18n]").forEach((element) => {
     element.textContent = t(element.dataset.i18n);
   });
@@ -5657,8 +5716,10 @@ function resetViewport() {
 
 async function saveProjectTitle() {
   if (!state) return;
-  const title = projectTitle.value.trim() || "Untitled";
+  const value = projectTitle.value.trim();
+  const title = value && !/^untitled$/i.test(value) ? value : canvasName(state);
   projectTitle.value = title;
+  if (title === canvasName(state)) return;
   state.title = title;
   await fetch(apiPath("/api/state"), {
     method: "POST",
@@ -5669,11 +5730,20 @@ async function saveProjectTitle() {
 
 function applyViewport() {
   world.style.transform = `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`;
+  const baseGrid = 40 * viewport.zoom;
+  const grid = baseGrid * 5 ** Math.max(0, Math.ceil(Math.log(12 / baseGrid) / Math.log(5)));
+  const major = grid * 5;
+  board.style.setProperty("--grid-step", `${grid}px`);
+  board.style.setProperty("--grid-major", `${major}px`);
+  board.style.setProperty("--grid-x", `${viewport.x % major}px`);
+  board.style.setProperty("--grid-y", `${viewport.y % major}px`);
+  minimap.update();
   world.style.setProperty("--resize-handle-size", `${8 / viewport.zoom}px`);
   world.style.setProperty("--resize-handle-offset", `${-4 / viewport.zoom}px`);
   world.style.setProperty("--resize-handle-border", `${1.5 / viewport.zoom}px`);
   world.style.setProperty("--resize-handle-radius", `${2 / viewport.zoom}px`);
-  zoomLabel.textContent = `${Math.round(viewport.zoom * 100)}%`;
+  const percent = viewport.zoom * 100;
+  zoomLabel.textContent = `${percent < 10 ? +percent.toFixed(2) : Math.round(percent)}%`;
 }
 
 function frameObjectForQuickEdit(object, action = "quick-edit") {
@@ -5775,6 +5845,27 @@ function frameWorldBounds(bounds, options = {}) {
   applyViewport();
   updateSelectionUi();
   scheduleViewportSave();
+}
+
+function frameAutomaticImageGroup(object) {
+  const id = object?.autoImageGroup?.panelId;
+  if (!id) return false;
+  const frame = objectLayer.querySelector(`[data-import-group="${CSS.escape(id)}"]`);
+  if (!frame) return false;
+  const narrow = board.clientWidth < board.clientHeight;
+  const padding = narrow ? 22 : 54;
+  const visibleWidth = narrow && object.autoImageGroup.blockId ? Math.min(frame.offsetWidth, 724) : frame.offsetWidth;
+  const left = Math.max(frame.offsetLeft, object.x + object.width + 24 - visibleWidth);
+  const zoom = clamp((board.clientWidth - padding * 2) / visibleWidth, minCanvasZoom, 1);
+  viewport.zoom = zoom;
+  viewport.x = narrow
+    ? (board.clientWidth - visibleWidth * zoom) / 2 - left * zoom
+    : padding - left * zoom;
+  viewport.y = (narrow ? 66 : 96) - Math.max(frame.offsetTop, object.y - 48) * zoom;
+  applyViewport();
+  updateSelectionUi();
+  scheduleViewportSave();
+  return true;
 }
 
 function boundsForObjects(objects) {

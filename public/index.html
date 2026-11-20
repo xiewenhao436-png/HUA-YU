@@ -13,7 +13,7 @@
         <section class="board-shell" aria-label="Canvas workspace">
           <header class="project-header">
             <span class="project-mark"></span>
-            <input id="projectTitle" class="project-title-input" value="Untitled" aria-label="Project title" spellcheck="false" />
+            <input id="projectTitle" class="project-title-input" aria-label="画布名称" spellcheck="false" />
             <button title="Project options" aria-label="Project options">
               <svg class="header-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="m6 9 6 6 6-6"></path>
@@ -261,6 +261,22 @@
               </div>
             </form>
           </div>
+
+          <aside id="canvasMinimap" class="canvas-minimap" aria-label="Canvas overview" hidden>
+            <canvas tabindex="0"></canvas>
+            <div class="canvas-minimap-controls">
+              <button type="button" data-minimap="out">
+                <svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg>
+              </button>
+              <output>72%</output>
+              <button type="button" data-minimap="in">
+                <svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+              </button>
+              <button type="button" data-minimap="fit">
+                <svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+              </button>
+            </div>
+          </aside>
 
           <div class="canvas-controls" aria-label="Canvas view controls">
             <button title="Reset view" aria-label="Reset view" data-tooltip="Reset view" data-view-action="reset">

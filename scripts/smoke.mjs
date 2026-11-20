@@ -591,7 +591,7 @@ async function testViewportSanitization() {
   const minZoom = await updateViewport(projectDir, { x: 10, y: 20, zoom: -4 });
   assertEqual(minZoom.x, 10, "updateViewport should keep finite x");
   assertEqual(minZoom.y, 20, "updateViewport should keep finite y");
-  assertEqual(minZoom.zoom, 0.12, "updateViewport should clamp zoom to the frontend minimum");
+  assertEqual(minZoom.zoom, 0.0001, "updateViewport should clamp zoom to the frontend minimum");
   const maxZoom = await updateViewport(projectDir, { zoom: 20 });
   assertEqual(maxZoom.zoom, 2.2, "updateViewport should clamp zoom to the frontend maximum");
   const unchanged = await updateViewport(projectDir, { zoom: "bad" });
@@ -607,7 +607,7 @@ async function testViewportSanitization() {
   const legacyState = await readState(legacyProjectDir);
   assertEqual(legacyState.viewport.x, 0, "readState should sanitize legacy viewport x values");
   assertEqual(legacyState.viewport.y, 24, "readState should preserve finite legacy viewport y values");
-  assertEqual(legacyState.viewport.zoom, 0.12, "readState should clamp legacy viewport zoom values");
+  assertEqual(legacyState.viewport.zoom, 0.0001, "readState should clamp legacy viewport zoom values");
 }
 
 async function testCanvasIdPathIsolation() {
@@ -1105,7 +1105,7 @@ async function testHttpJsonBoundaries() {
         viewport: { x: 5, y: 6, zoom: -1 }
       });
       assertEqual(negativeZoom.status, 200, "HTTP viewport update should accept numeric viewport payloads");
-      assertEqual(negativeZoom.body.zoom, 0.12, "HTTP viewport update should clamp zoom to the frontend minimum");
+      assertEqual(negativeZoom.body.zoom, 0.0001, "HTTP viewport update should clamp zoom to the frontend minimum");
       const hugeZoom = await postJson(`${viewportBase}api/state${viewportSearch}`, {
         viewport: { zoom: 100 }
       });

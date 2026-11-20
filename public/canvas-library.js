@@ -1,6 +1,6 @@
-import { showProjectCanvasCenter } from "./canvas-center.js";
+import { canvasName, showProjectCanvasCenter } from "./canvas-center.js";
 
-const titleOf = board => board.threadTitle || board.title || "未命名画布";
+const titleOf = canvasName;
 const el = (tag, cls, text) => { const node = document.createElement(tag); if (cls) node.className = cls; if (text != null) node.textContent = text; return node; };
 const button = (text, action) => { const b = el("button", "library-button", text); b.type = "button"; b.onclick = action; return b; };
 
@@ -40,11 +40,30 @@ export function groupCanvasProjects(data) {
     const identity = `${boardPath(board.projectDir)}\n${board.canvasId || ""}`;
     if (seen.has(identity)) continue;
     seen.add(identity);
-    const root = workspaceFor(board, data.threads || []);
-    if (!groups.has(root)) groups.set(root, { root, boards: [] });
+    const root = board.projectKey || workspaceFor(board, data.threads || []);
+    const name = board.projectName || root.split(/[\\/]/).filter(Boolean).at(-1) || "零散生图";
+    if (!groups.has(root)) groups.set(root, { root, name, boards: [] });
     groups.get(root).boards.push(board);
   }
-  return [...groups.values()].sort((a, b) => a.root.localeCompare(b.root, "zh-CN"));
+  return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
+}
+
+export function groupedCanvasSwitcher(data, scope) {
+  return visibleCanvasProjects(data).map(group => {
+    const boards = group.boards
+      .map(board => ({ ...board, current: board.id === scope?.boardId }))
+      .sort((a, b) => Number(b.current) - Number(a.current) || (b.updatedAt || "").localeCompare(a.updatedAt || ""));
+    return { ...group, boards };
+  }).sort((a, b) => Number(b.boards.some(board => board.current)) - Number(a.boards.some(board => board.current)));
+}
+
+function visibleCanvasProjects(data) {
+  const hiddenProjects = new Set(data.hiddenProjects || []);
+  const hiddenBoards = new Set(data.hiddenBoards || []);
+  return groupCanvasProjects(data).flatMap(group => {
+    const boards = group.boards.filter(board => !hiddenProjects.has(group.root) && !hiddenBoards.has(board.id));
+    return boards.length ? [{ ...group, boards }] : [];
+  });
 }
 
 export async function showCanvasLauncher({ container, call, threadId, isBound, onOpen, autoOpen = true }) {
@@ -104,11 +123,11 @@ export function installCanvasLibrary(host) {
   function renderBoards() {
     boards.replaceChildren();
     const query = search.value.toLocaleLowerCase();
-    for (const board of data.filter(b => `${titleOf(b)} ${b.title}`.toLocaleLowerCase().includes(query))) {
+    for (const board of data.filter(b => `${titleOf(b)} ${b.projectName || ""}`.toLocaleLowerCase().includes(query))) {
       const b = button("", () => choose(board)); b.dataset.sourceBoard = board.id;
       b.classList.toggle("active", board.id === source?.id);
       b.disabled = busy;
-      b.append(el("strong", "", titleOf(board)), el("span", "", `${board.imageCount} 张图片 · ${board.title || "画布"}`));
+      b.append(el("strong", "", titleOf(board)), el("span", "", `${board.imageCount} 张图片 · ${board.projectName || "画布"}`));
       boards.append(b);
     }
   }
@@ -117,7 +136,7 @@ export function installCanvasLibrary(host) {
     try {
       const result = await host.call({ action: "list", refresh: refreshScan });
       const target = host.scope();
-      data = result.boards.filter(b => b.id !== target.boardId && !(target.projectDir && b.projectDir === target.projectDir && (b.canvasId || null) === (target.canvasId || null)));
+      data = visibleCanvasProjects(result).flatMap(group => group.boards).filter(b => b.id !== target.boardId && !(target.projectDir && b.projectDir === target.projectDir && (b.canvasId || null) === (target.canvasId || null)));
       renderBoards();
       status.textContent = data.length ? "选择来源画布；浏览和选择不会修改原画布。" : "暂无其他画布，可点“刷新旧画布”扫描已有项目。";
       selectionState();

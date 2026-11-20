@@ -163,4 +163,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "画屿 $TAG" \
-            --notes "修复了一些椅子问题，当牛做马更舒服了。"
+            --notes "修复了一些椅子问题"

@@ -7,10 +7,11 @@ import { withCanvasWriteLock } from "./canvas-write-lock.mjs";
 
 // Copies only the board state and its private asset tree. Jobs and runtime files
 // are not portable: they refer to the original session and running processes.
-export async function copyBoardToProject(boardId, targetProject) {
+export async function copyBoardToProject(boardId, targetProject, projectKey) {
   const source = await knownBoard(boardId);
   const library = await listCanvases();
-  const target = library.boards.find(b => b.projectDir === targetProject)?.projectDir;
+  const destination = library.boards.find(b => b.projectDir === targetProject && (!projectKey || b.projectKey === projectKey));
+  const target = destination?.projectDir;
   if (!target) throw new Error("目标项目不在画布列表中，请刷新后重试。");
   const realTarget = await fs.realpath(target);
   if (normalizePhysicalPath(realTarget) !== normalizePhysicalPath(target)) throw new Error("目标项目包含目录跳转，无法安全复制。");
@@ -34,7 +35,11 @@ export async function copyBoardToProject(boardId, targetProject) {
     await checked(path.join(sourceDir, "codex-canvas.json"));
     const state = JSON.parse(await fs.readFile(path.join(sourceDir, "codex-canvas.json"), "utf8"));
     if (!Array.isArray(state.objects)) throw new Error("画布数据无法识别。");
-    if (source.displayTitle) state.title = source.displayTitle;
+    state.title = source.title;
+    state.projectName = destination.projectName;
+    state.projectKey = destination.projectKey;
+    if (destination.projectOverride) state.projectOverride = destination.projectOverride;
+    else delete state.projectOverride;
     const threads = path.dirname(dest);
     await fs.mkdir(threads, { recursive: true });
     if (normalizePhysicalPath(await fs.realpath(threads)) !== normalizePhysicalPath(threads)) throw new Error("目标画布目录包含目录跳转。");

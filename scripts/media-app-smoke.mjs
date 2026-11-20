@@ -125,8 +125,13 @@ try {
     await frame.evaluate(() => { testClipboard.reject = true; });
     await imageA.click({ button: "right" });
     await frame.locator('[data-media-action="copy"]').click();
-    await frame.waitForFunction(() => document.querySelector("#toast").textContent.includes("未允许复制图片"));
+    await frame.waitForFunction(() => document.querySelector("#toast").textContent.includes("请在画布上右键粘贴"));
     assert.equal(await frame.evaluate(() => testClipboard.images.length), 1);
+    await frame.locator("#board").dispatchEvent("contextmenu", { clientX: 40, clientY: 200 });
+    await frame.locator('[data-media-action="paste-image"]').click();
+    await frame.waitForFunction(() => document.querySelectorAll("#objects .canvas-object").length === 4);
+    await frame.locator("#board").press(`${shortcutModifier}+z`);
+    await frame.waitForFunction(() => document.querySelectorAll("#objects .canvas-object").length === 3);
     await frame.evaluate(() => { testClipboard.reject = false; });
     const paste = async ({ text = "", files = [] }) => frame.evaluate(({ text, files, png }) => {
       document.querySelector("#board").focus();
@@ -230,6 +235,27 @@ try {
     await frame.locator('[data-media-action="copy"]').click();
     await frame.waitForFunction(() => testClipboard.images.length === 3);
     await page.keyboard.press("Escape");
+    // Uploads can overlap the source image in a narrow viewport.
+    await imageA.dispatchEvent("pointerdown", { button: 0, buttons: 1, pointerId: 1, pointerType: "mouse", isPrimary: true });
+    await imageA.dispatchEvent("pointerup", { button: 0, buttons: 0, pointerId: 1, pointerType: "mouse", isPrimary: true });
+    await frame.locator("#board").press(`${shortcutModifier}+c`);
+    await frame.waitForFunction(() => testClipboard.images.length === 4);
+    assert.equal(await frame.evaluate(() => testClipboard.images[3]), `data:image/png;base64,${png}`);
+    await frame.evaluate(() => {
+      navigator.clipboard.write = async () => { throw new DOMException("Denied", "NotAllowedError"); };
+    });
+    await frame.locator("#board").press(`${shortcutModifier}+c`);
+    await frame.waitForFunction(() => document.querySelector("#toast").textContent.includes("当前画屿画布粘贴"));
+    const marker = await frame.evaluate(() => testClipboard.texts.at(-1));
+    assert.match(marker, /^huayu-image:/);
+    const countBeforeFallback = (await getState()).objects.length;
+    assert.equal(await paste({ text: marker }), true);
+    await frame.waitForFunction(count => document.querySelectorAll("#objects .canvas-object").length === count + 1, countBeforeFallback);
+    const copied = (await getState()).objects.filter(object => object.name === "SC01A.png");
+    assert.equal(copied.length, 2);
+    assert.equal((await fs.readFile(copied.at(-1).assetPath)).toString("base64"), png);
+    assert.equal(await paste({ text: "huayu-image:ffffffffffffffffffffffffffffffff" }), true);
+    assert.equal((await getState()).objects.length, countBeforeFallback + 1);
     // Switching chat while a paste is in flight must never import into the new scope.
     importGate = new Promise(resolve => { releaseImport = resolve; });
     const importNoticed = new Promise(resolve => { noticeImport = resolve; });

@@ -70,7 +70,7 @@ export async function libraryAsset(boardId, objectId, original = false) {
   }
   return { mime, base64: bytes.toString("base64") };
 }
-export async function importBoardImages({ sourceBoardId, objectIds, groupId, importedAt, offset = 0, x = 120, y = 160, columns = 4 }, target) {
+export async function importBoardImages({ sourceBoardId, objectIds, groupId, importedAt, offset = 0, x, y, columns = 4, autoPosition }, target) {
   if (!/^[a-zA-Z0-9_-]{8,100}$/.test(groupId || "")) throw new Error("导入批次编号无效。");
   if (!Array.isArray(objectIds) || !objectIds.length || objectIds.length > 20 || objectIds.some(id => typeof id !== "string")) throw new Error("每次导入分段最多 20 张图片。");
   const source = await knownBoard(sourceBoardId);
@@ -78,6 +78,7 @@ export async function importBoardImages({ sourceBoardId, objectIds, groupId, imp
   const state = await readState(source.projectDir, { canvasId: source.canvasId, readOnly: true });
   const selected = new Map(state.objects.filter(o => (o.type || "image") === "image").map(o => [o.id, o]));
   const inputs = [], errors = [];
+  const explicitPosition = Number.isFinite(x) || Number.isFinite(y);
   columns = Math.max(1, Math.min(8, Math.round(columns) || 4));
   x = Number.isFinite(x) ? Math.max(-900000, Math.min(900000, x)) : 120;
   y = Number.isFinite(y) ? Math.max(-900000, Math.min(900000, y)) : 160;
@@ -91,7 +92,10 @@ export async function importBoardImages({ sourceBoardId, objectIds, groupId, imp
       inputs.push({ ...(asset.file ? { path: asset.file } : { dataUrl: `data:${asset.mime};base64,${asset.bytes.toString("base64")}` }),
         name: object.name, prompt: object.prompt, imagegenPrompt: object.imagegenPrompt, crop: object.crop,
         width: Math.round((object.width || 320) * scale), height: Math.round((object.height || 240) * scale),
-        x: x + ((offset + index) % columns) * 356, y: y + Math.floor((offset + index) / columns) * 290,
+        ...(explicitPosition ? {
+          x: x + ((offset + index) % columns) * 356,
+          y: y + Math.floor((offset + index) / columns) * 290
+        } : { autoPosition }),
         layoutMode: "manual", importGroupId: groupId, importedFrom: { boardId: source.id, objectId: id, threadId: source.threadId,
           threadTitle: source.threadTitle, boardTitle: source.title, importedAt: importedAt || new Date().toISOString() }
       });

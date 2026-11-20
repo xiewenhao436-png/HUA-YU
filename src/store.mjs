@@ -2,12 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import { assetsDirFor, dataDirFor, legacyCanvasDataDirFor, statePathFor } from "./paths.mjs";
-import { recordCanvas, assertBoardAvailable } from "./canvas-index.mjs";
+import { resolveBoardIdentity, meaningfulTitle } from "./canvas-identity.mjs";
+import { recordCanvas, assertBoardAvailable, canvasIdentity } from "./canvas-index.mjs";
 import { withCanvasWriteLock } from "./canvas-write-lock.mjs";
+import { automaticImagePlacement, normalizeAutoCoordinate } from "./canvas-image-layout.mjs";
 
 const defaultState = {
   version: 1,
-  title: "Untitled",
   viewport: { x: 0, y: 0, zoom: 0.72 },
   objects: [],
   selection: null,
@@ -16,14 +17,13 @@ const defaultState = {
 
 const defaultImageSize = { width: 360, height: 360 };
 const maxImageDisplaySize = 420;
-const maxObjectCoordinate = 1_000_000;
 const maxObjectDimension = 6000;
 const minFontSize = 6;
 const maxFontSize = 160;
 const minStrokeWidth = 1;
 const maxStrokeWidth = 80;
 const maxDurationMs = 24 * 60 * 60 * 1000;
-const minViewportZoom = 0.12;
+const minViewportZoom = 0.0001;
 const maxViewportZoom = 2.2;
 const derivedGap = 72;
 const stateLocks = new Map();
@@ -192,7 +192,9 @@ async function ensureProjectStoreUnlocked(projectDir, options = {}) {
     try {
       await fs.access(statePath);
     } catch {
-      await writeStateFile(projectDir, defaultState, options);
+      const initialState = { ...defaultState, ...await canvasIdentity(projectDir, canvasId, defaultState, options) };
+      if (typeof options.projectOverride === "string") initialState.projectOverride = options.projectOverride.trim();
+      await writeStateFile(projectDir, initialState, options);
     }
   });
 }
@@ -390,7 +392,8 @@ export async function readState(projectDir, options = {}) {
     return normalizeState(defaultState, { projectDir, canvasId });
   }
   await ensureProjectStore(projectDir, options);
-  return readStateFile(projectDir, { canvasId });
+  const state = await readStateFile(projectDir, { canvasId });
+  return { ...state, ...await canvasIdentity(projectDir, canvasId, state, options) };
 }
 
 export async function searchObjects(projectDir, { query = "", limit = 20, type = null, canvasId = null } = {}) {
@@ -537,7 +540,8 @@ async function writeStateFile(projectDir, state, options = {}) {
   const canvasId = canvasIdFrom(options);
   const statePath = statePathFor(projectDir, canvasId);
   await fs.mkdir(path.dirname(statePath), { recursive: true });
-  const next = normalizeState({ ...state, updatedAt: new Date().toISOString() }, { projectDir, canvasId });
+  const title = meaningfulTitle(state.title) || (await canvasIdentity(projectDir, canvasId, state, options)).title;
+  const next = normalizeState({ ...state, title, updatedAt: new Date().toISOString() }, { projectDir, canvasId });
   const tempPath = `${statePath}.${process.pid}.${Date.now()}.${crypto.randomBytes(3).toString("hex")}.tmp`;
   await fs.writeFile(tempPath, `${JSON.stringify(next, null, 2)}\n`);
   await fs.rename(tempPath, statePath);
@@ -556,6 +560,7 @@ function normalizeState(state = {}, context = {}) {
   return {
     ...defaultState,
     ...state,
+    title: meaningfulTitle(state.title) || (context.projectDir && resolveBoardIdentity({ ...context, objects }).title),
     viewport: normalizeViewport(state.viewport),
     objects,
     selection
@@ -751,8 +756,7 @@ async function addImageUnlocked(projectDir, input, options = {}) {
       };
     }
 
-    const count = state.objects.length;
-    const object = imageObjectForAsset(asset, input, count);
+    const object = imageObjectForAsset(asset, input, state.objects);
 
     return {
       state: { ...state, objects: [...state.objects, object], selection: object.id },
@@ -761,9 +765,10 @@ async function addImageUnlocked(projectDir, input, options = {}) {
   });
 }
 
-function imageObjectForAsset(asset, input, count) {
+function imageObjectForAsset(asset, input, objects) {
     const displaySize = imageDisplaySize(asset, input);
-    return {
+    const count = objects.length;
+    const object = {
       id: `img_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
       type: "image",
       name: sanitizeString(input.name, asset.name || "Image"),
@@ -786,6 +791,9 @@ function imageObjectForAsset(asset, input, count) {
       ...importMetadata(input),
       createdAt: new Date().toISOString()
     };
+    const queuedDraft = input.layoutMode === "draft-grid";
+    if (input.sourceObjectId || (!queuedDraft && (Number.isFinite(input.x) || Number.isFinite(input.y)))) return object;
+    return automaticImagePlacement(object, input, objects);
 }
 
 function importMetadata(input) {
@@ -822,7 +830,7 @@ async function addImagesBatchUnlocked(projectDir, inputs, options = {}) {
       const key = `${input.importGroupId}\n${input.importedFrom?.objectId}`;
       if (keys.has(key)) continue;
       keys.add(key);
-      objects.push(imageObjectForAsset(asset, input, state.objects.length + objects.length));
+      objects.push(imageObjectForAsset(asset, input, [...state.objects, ...objects]));
     }
     return {
       state: { ...state, objects: [...state.objects, ...objects], selection: objects.at(-1)?.id || state.selection },
@@ -1017,7 +1025,7 @@ function clampNumber(value, min, max, fallback) {
 }
 
 function sanitizeCoordinate(value, fallback = 0) {
-  return Math.round(clampNumber(value, -maxObjectCoordinate, maxObjectCoordinate, fallback));
+  return Math.round(clampNumber(value, -1_000_000, 1_000_000, fallback));
 }
 
 function sanitizeDimension(value, fallback = 1) {
@@ -1058,8 +1066,8 @@ function normalizePersistedObject(object, context = {}) {
     name: sanitizeString(object.name, type === "text" ? "Text" : type === "drawing" ? "Drawing" : type === "annotation" ? "Annotation" : "Image"),
     prompt: sanitizeString(object.prompt, "", 4000),
     imagegenPrompt: sanitizeString(object.imagegenPrompt, "", 20000),
-    x: sanitizeCoordinate(object.x),
-    y: sanitizeCoordinate(object.y),
+    x: object.autoImageGroup ? normalizeAutoCoordinate(object.x) : sanitizeCoordinate(object.x),
+    y: object.autoImageGroup ? normalizeAutoCoordinate(object.y) : sanitizeCoordinate(object.y),
     width: sanitizeDimension(object.width, type === "text" ? 220 : 1),
     height: sanitizeDimension(object.height, type === "text" ? 80 : 1)
   };
@@ -1178,8 +1186,8 @@ function comparablePath(filePath) {
 
 export async function updateProjectMeta(projectDir, patch, options = {}) {
   return mutateState(projectDir, options, (state) => {
-    const title = typeof patch.title === "string" && patch.title.trim()
-      ? patch.title.trim().slice(0, 120)
+    const title = meaningfulTitle(patch.title)
+      ? patch.title.trim().slice(0, 200)
       : state.title;
     return {
       state: { ...state, title },
@@ -1426,7 +1434,7 @@ export async function updateObjects(projectDir, updates, options = {}) {
 function objectWithPatch(object, patch) {
   return {
     ...object,
-    ...sanitizeObjectPatch(patch),
+    ...sanitizeObjectPatch(patch, object),
     id: object.id,
     type: object.type,
     src: object.src,
@@ -1436,10 +1444,11 @@ function objectWithPatch(object, patch) {
   };
 }
 
-function sanitizeObjectPatch(patch = {}) {
+function sanitizeObjectPatch(patch = {}, object) {
   const next = {};
+  const coordinate = object?.autoImageGroup ? normalizeAutoCoordinate : sanitizeCoordinate;
   for (const key of ["x", "y"]) {
-    if (Number.isFinite(patch[key])) next[key] = sanitizeCoordinate(patch[key]);
+    if (Number.isFinite(patch[key])) next[key] = coordinate(patch[key]);
   }
   for (const key of ["width", "height"]) {
     if (Number.isFinite(patch[key])) next[key] = sanitizeDimension(patch[key]);

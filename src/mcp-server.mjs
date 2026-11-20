@@ -13,11 +13,11 @@ import { addImage, promptHistory, readState, searchObjects, versionGroups } from
 import { pluginRoot, resolveProjectDir } from "./paths.mjs";
 import { canvasIdForThread, normalizeThreadId } from "./runtime.mjs";
 import { APP_VERSION } from "./version.mjs";
+import { meaningfulTitle } from "./canvas-identity.mjs";
 import { createAppSession } from "./server.mjs";
-import { setBoardHidden, setProjectHidden, updateBoardMetadata, recordCanvas, listCanvases, knownBoard, localThreads, boardIdFor, boardScopeKey, assertBoardAvailable } from "./canvas-index.mjs";
+import { setBoardHidden, setProjectHidden, updateBoardMetadata, recordCanvas, listCanvases, knownBoard, localThreads, validateProjectName, boardIdFor, canvasIdentity, boardScopeKey, assertBoardAvailable } from "./canvas-index.mjs";
 import { trashBoard, restoreBoard, permanentlyDeleteBoard, onBoardTrashed } from "./canvas-trash.mjs";
 import { CANVAS_LIBRARY_ACTIONS, browseBoard, libraryAsset, importBoardImages } from "./canvas-library.mjs";
-import { updateProjectMeta } from "./store.mjs";
 
 // Keep resources and handlers in the same process generation. Reading the file
 // again after an in-place update would serve new controls to an old handler.
@@ -104,7 +104,8 @@ async function handle(method, params) {
             action: { type: "string", enum: libraryActions },
             boardId: { type: "string" }, threadId: { type: "string" }, refresh: { type: "boolean" }, sessionId: { type: "string" },
             objectId: { type: "string" }, original: { type: "boolean" }, sourceBoardId: { type: "string" }, objectIds: { type: "array", items: { type: "string" } },
-            groupId: { type: "string" }, importedAt: { type: "string" }, offset: { type: "number" }, x: { type: "number" }, y: { type: "number" }, columns: { type: "number" }, confirmed: { type: "boolean" }, targetProject: { type: "string" }, displayTitle: { type: "string" }, importance: { type: "number" }, projectRoot: { type: "string" }, hidden: { type: "boolean" }
+            groupId: { type: "string" }, importedAt: { type: "string" }, offset: { type: "number" }, x: { type: "number" }, y: { type: "number" }, columns: { type: "number" }, confirmed: { type: "boolean" }, targetProject: { type: "string" }, displayTitle: { type: "string" }, projectName: { type: "string" }, projectKey: { type: "string" }, importance: { type: "number" }, projectRoot: { type: "string" }, hidden: { type: "boolean" },
+            autoPosition: { type: "object", properties: { x: { type: "number" }, y: { type: "number" } } }
           } }
         },
         {
@@ -129,6 +130,8 @@ async function handle(method, params) {
             properties: {
               presentation: { type: "string", enum: ["sidebar", "browser"], description: "Defaults to the native plugin sidebar; browser is a compatibility fallback." },
               projectDir: { type: "string", description: "Absolute path to the active Codex project." },
+              displayTitle: { type: "string", description: "Name of a newly created canvas, based on its subject." },
+              projectName: { type: "string", description: "Name of the top-level project. Use 零散生图 for standalone image chats." },
               port: { type: "number", description: "Local port. Defaults to 43217." },
               threadId: { type: "string", description: "Codex thread id to bind this canvas to for canvas-to-chat and thread-scoped canvas state. Defaults to the current Codex thread when available." }
             }
@@ -152,6 +155,8 @@ async function handle(method, params) {
               url: { type: "string", description: "Remote image URL to place on the canvas." },
               dataUrl: { type: "string", description: "Base64 image data URL." },
               name: { type: "string" },
+              batchId: { type: "string", description: "Use the same identifier to group images from one import." },
+              autoGroupTitle: { type: "string", description: "Canvas heading for the imported image group." },
               prompt: { type: "string" },
               imagegenPrompt: { type: "string", description: "Full prompt sent to the image generation runner, when available." },
               threadId: { type: "string", description: "Codex thread id whose canvas should receive the image. Pass this explicitly for thread-scoped canvases; omitted means the default project canvas." },
@@ -308,8 +313,8 @@ async function handle(method, params) {
       if (args.action === "app-update-status") return { content: [], structuredContent: await dailyAppUpdateStatus() };
       if (args.action === "app-update-check") return { content: [], structuredContent: await dailyAppUpdateStatus({ force: true }) };
       if (args.action === "app-update-run") return { content: [], structuredContent: await updateApp() };
-      if (["rename", "importance"].includes(args.action)) return { content: [], structuredContent: await updateBoardMetadata(args.boardId, args.action === "rename" ? { displayTitle: args.displayTitle } : { importance: args.importance }) };
-      if (args.action === "copy-board") return { content: [], structuredContent: await copyBoardToProject(args.boardId, args.targetProject) };
+      if (["rename", "importance"].includes(args.action)) return { content: [], structuredContent: await updateBoardMetadata(args.boardId, args.action === "rename" ? { displayTitle: args.displayTitle, projectName: args.projectName } : { importance: args.importance }) };
+      if (args.action === "copy-board") return { content: [], structuredContent: await copyBoardToProject(args.boardId, args.targetProject, args.projectKey) };
       if (args.action === "trash") return { content: [], structuredContent: await trashBoard(args.boardId) };
       if (args.action === "restore") return { content: [], structuredContent: await restoreBoard(args.boardId) };
       if (args.action === "board-visibility") return { content: [], structuredContent: await setBoardHidden(args.boardId, args.hidden) };
@@ -319,8 +324,9 @@ async function handle(method, params) {
         const data = await listCanvases({ refresh: args.refresh === true });
         const callerThreadId = normalizeThreadId(args.threadId) || environmentThreadId();
         const current = data.threads.find(t => t.id === callerThreadId);
-        const remembered = data.boards.find(b => b.id === data.lastByThread[callerThreadId]);
-        const suggested = remembered || data.boards.find(b => b.threadId === callerThreadId);
+        const visible = data.boards.filter(board => !data.hiddenBoards.includes(board.id) && !data.hiddenProjects.includes(board.projectKey));
+        const remembered = visible.find(b => b.id === data.lastByThread[callerThreadId]);
+        const suggested = remembered || visible.find(b => b.threadId === callerThreadId);
         return { content: [], structuredContent: { ...data, libraryActions, runtimeRevision: canvasAppRevision, callerThreadId, currentThread: current || null, suggestedBoardId: suggested?.id || null } };
       }
       if (args.action === "open") {
@@ -332,13 +338,15 @@ async function handle(method, params) {
         if (!thread || !path.isAbsolute(thread.cwd || "")) throw new Error("无法确定这个会话的工作目录，请选择已有画布。");
         const existing = (await listCanvases()).boards.find(b => b.threadId === thread.id);
         if (existing) return openSidebar(existing.projectDir, existing.threadId, { canvasId: existing.canvasId, title: thread.title, openedBy: thread.id });
+        validateCreationIdentity(args);
         const stamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
         const projectDir = path.join(thread.cwd, "_codex", `${stamp}-canvas-${thread.id.slice(0, 8)}`, "work", "board");
         const canvasId = canvasIdForThread(thread.id);
         await fs.mkdir(projectDir, { recursive: true });
-        const result = await openSidebar(projectDir, thread.id, { canvasId, title: thread.title, openedBy: thread.id });
-        await updateProjectMeta(projectDir, { title: thread.title || "Untitled" }, { canvasId });
-        return result;
+        return openSidebar(projectDir, thread.id, {
+          canvasId, title: thread.title, openedBy: thread.id,
+          displayTitle: args.displayTitle, projectOverride: args.projectName
+        });
       }
       if (args.action === "browse") return { content: [], structuredContent: await browseBoard(args.boardId) };
       if (args.action === "asset") return { content: [], structuredContent: await libraryAsset(args.boardId, args.objectId, args.original === true) };
@@ -368,16 +376,22 @@ async function handle(method, params) {
         ...textResult("Open the saved-canvas launcher directly in the sidebar.", { presentation: "sidebar", needsProject: true, launcher: true, threadId: normalizeThreadId(args.threadId) || environmentThreadId() }),
         _meta: { "openai/widgetSessionId": "huayu" }
       };
+      validateCreationIdentity(args);
       let projectDir = requireProjectDir(args);
       if (args.presentation !== "browser") {
         const threadId = normalizeThreadId(args.threadId) || environmentThreadId();
         const saved = (await listCanvases()).boards.find(b => b.threadId === threadId && (b.projectDir === projectDir || path.relative(projectDir, b.projectDir).startsWith(`_codex${path.sep}`)));
         if (saved) projectDir = saved.projectDir;
-        return openSidebar(projectDir, threadId, { canvasId: saved?.canvasId, title: saved?.threadTitle, openedBy: threadId });
+        return openSidebar(projectDir, threadId, {
+          canvasId: saved?.canvasId, title: saved?.threadTitle, openedBy: threadId,
+          displayTitle: args.displayTitle, projectOverride: args.projectName
+        });
       }
       const entrypoint = path.join(pluginRoot, "bin", "codex-canvas.mjs");
       const cliArgs = ["open", "--project", projectDir, "--port", String(normalizePort(args.port))];
       if (args.threadId) cliArgs.push("--thread-id", args.threadId);
+      if (args.displayTitle) cliArgs.push("--title", args.displayTitle);
+      if (args.projectName) cliArgs.push("--project-name", args.projectName);
       const output = await captureConsole(() => cliMain(
         cliArgs,
         { entrypoint }
@@ -390,7 +404,7 @@ async function handle(method, params) {
       const projectDir = requireProjectDir(args);
       requireSingleImageInput(args);
       const canvas = await resolveCanvasOptions(projectDir, args);
-      const object = await addImage(projectDir, args, { canvasId: canvas.canvasId });
+      const object = await addImage(projectDir, args, { canvasId: canvas.canvasId, threadId: canvas.threadId });
       return textResult(`已添加图片到画屿：${object.name}`, object);
     }
 
@@ -421,6 +435,7 @@ async function handle(method, params) {
         projectDir,
         canvasId: canvas.canvasId,
         objects: state.objects.length,
+        ...await canvasIdentity(projectDir, canvas.canvasId, state, { threadId: canvas.threadId }),
         selection: state.selection,
         chatThreadId: canvas.threadId || null,
         chatBound: Boolean(canvas.threadId),
@@ -533,10 +548,17 @@ async function handle(method, params) {
   throw new Error(`Unsupported MCP method: ${method}`);
 }
 
-async function openSidebar(projectDir, threadId, { canvasId = canvasIdForThread(threadId), title, openedBy } = {}) {
+function validateCreationIdentity({ displayTitle, projectName }) {
+  if (displayTitle !== undefined && (!meaningfulTitle(displayTitle) || displayTitle.trim().length > 200)) {
+    throw new Error("请输入 1 至 200 个字符的画布名称。");
+  }
+  if (projectName !== undefined) validateProjectName(projectName);
+}
+
+async function openSidebar(projectDir, threadId, { canvasId = canvasIdForThread(threadId), title, openedBy, displayTitle, projectOverride } = {}) {
   await assertBoardAvailable(projectDir, canvasId);
   const key = JSON.stringify([projectDir, canvasId]);
-  if (!openingSessions.has(key)) openingSessions.set(key, createAppSession({ projectDir, threadId, canvasId }).then(session => {
+  if (!openingSessions.has(key)) openingSessions.set(key, createAppSession({ projectDir, threadId, canvasId, identity: { threadTitle: title, displayTitle, projectOverride } }).then(session => {
     const sessionId = crypto.randomUUID();
     appSessions.set(sessionId, { ...session, projectDir, canvasId, threadId });
     return { sessionId, projectId: session.projectId, projectDir, canvasId, threadId, boardId: boardIdFor(projectDir, canvasId), threadTitle: title || "" };

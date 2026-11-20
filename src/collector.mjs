@@ -6,7 +6,6 @@ import { addImage, isSupportedImageBuffer, readState } from "./store.mjs";
 
 const imageExtensions = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif"]);
 const boardPadding = 120;
-const verticalGap = 56;
 const horizontalGap = 64;
 const editGap = 72;
 const batchWindowMs = 12_000;
@@ -57,8 +56,7 @@ export async function collectRecentImages(projectDir, options = {}) {
       name: path.basename(candidate.path),
       prompt: options.prompt || "Collected recent image",
       imagegenPrompt: options.imagegenPrompt || "",
-      x: candidate.x,
-      y: candidate.y,
+      ...(options.sourceObjectId ? { x: candidate.x, y: candidate.y } : { autoGroupTitle: "最近生成的图片" }),
       batchId: candidate.batchId,
       layoutMode: candidate.layoutMode,
       sourceObjectId: options.sourceObjectId || null
@@ -82,36 +80,10 @@ function planImageLayout({ candidates, state, options }) {
     return planCanvasDerivedRow(candidates, state, options.sourceObjectId);
   }
 
-  const batches = groupSessionBatches(candidates);
-  let nextY = nextSessionY(state);
-  const planned = [];
-
-  for (const batch of batches) {
+  return groupSessionBatches(candidates).flatMap(batch => {
     const batchId = `session_${Math.round(batch[0].mtimeMs)}`;
-    if (batch.length > 1) {
-      const row = planRow(batch, {
-        x: boardPadding,
-        y: nextY,
-        batchId,
-        layoutMode: "session-row"
-      });
-      planned.push(...row);
-      nextY += maxHeight(row) + verticalGap;
-      continue;
-    }
-
-    const candidate = batch[0];
-    planned.push({
-      ...candidate,
-      x: boardPadding,
-      y: nextY,
-      batchId,
-      layoutMode: "session-column"
-    });
-    nextY += displayHeight(candidate) + verticalGap;
-  }
-
-  return planned;
+    return batch.map(candidate => ({ ...candidate, batchId }));
+  });
 }
 
 function planCanvasDerivedRow(candidates, state, sourceObjectId) {
@@ -156,30 +128,12 @@ function groupSessionBatches(candidates) {
   return groups;
 }
 
-function nextSessionY(state) {
-  const sessionObjects = state.objects.filter((object) => object.layoutMode?.startsWith("session"));
-  const base = sessionObjects.length > 0 ? bottommostY({ objects: sessionObjects }) + verticalGap : boardPadding;
-  return Math.max(boardPadding, base);
-}
-
 function rightmostX(state) {
   return state.objects.reduce((right, object) => Math.max(right, object.x + object.width), boardPadding);
 }
 
-function bottommostY(state) {
-  return state.objects.reduce((bottom, object) => Math.max(bottom, object.y + object.height), boardPadding);
-}
-
-function maxHeight(candidates) {
-  return candidates.reduce((height, candidate) => Math.max(height, displayHeight(candidate)), 0);
-}
-
 function displayWidth(candidate) {
   return Number.isFinite(candidate.width) ? candidate.width : 360;
-}
-
-function displayHeight(candidate) {
-  return Number.isFinite(candidate.height) ? candidate.height : 360;
 }
 
 function normalizeRoots(projectDir, roots, options = {}) {

@@ -57,6 +57,10 @@ for (const withOptionalColumns of [true, false]) {
       await fs.writeFile(path.join(boardDir, "codex-canvas.json"), JSON.stringify({
         version: 1, title: "发现已有分镜", objects: [{ id: "preview", type: "image", src: "/assets/fixture.png" }]
       }));
+      const ignored = path.join(project, "_codex", "temporary-preview");
+      await fs.mkdir(path.join(ignored, "canvas"), { recursive: true });
+      await fs.writeFile(path.join(ignored, ".huayu-ignore"), "");
+      await fs.writeFile(path.join(ignored, "canvas", "codex-canvas.json"), JSON.stringify({ title: "测试画布", objects: [] }));
       // Metadata discovery must choose the newest numeric database, not a string sort.
       const older = new DatabaseSync(path.join(home, "state_2.sqlite"));
       older.exec("CREATE TABLE unrelated (id TEXT)"); older.close();
@@ -84,3 +88,49 @@ for (const withOptionalColumns of [true, false]) {
     } finally { await fs.rm(root, { recursive: true, force: true }); }
   });
 }
+
+test("New boards persist their title and top-level project, and generic chats share a category", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "huayu-board-naming-"));
+  const env = {
+    ...process.env,
+    CODEX_CANVAS_LIBRARY_PATH: path.join(root, "library.json"),
+    CODEX_CANVAS_PROJECT_REGISTRY_PATH: path.join(root, "projects.json"),
+    CODEX_CANVAS_THREADS_FILE: path.join(root, "threads.json")
+  };
+  const project = path.join(root, "客户", "十五五");
+  const projectTask = path.join(project, "新4条", "_codex", "task", "work", "board");
+  const chat = path.join(root, "Codex", "2026-11-20", "new-chat-2");
+  const storeUrl = new URL("../src/store.mjs", import.meta.url).href;
+  try {
+    await fs.writeFile(env.CODEX_CANVAS_THREADS_FILE, JSON.stringify([
+      { id: "named-chat", cwd: projectTask, title: "服务视频分镜" },
+      { id: "solo-chat", cwd: chat, title: "New chat" }
+    ]));
+    const source = `
+      import { ensureProjectStore, readState } from ${JSON.stringify(storeUrl)};
+      import { updateLibraryIndex, listCanvases, recordCanvas, updateBoardMetadata } from ${JSON.stringify(indexUrl)};
+      const projectStore = ${JSON.stringify(projectTask)};
+      const soloStore = ${JSON.stringify(chat)};
+      await updateLibraryIndex(index => { index.projectCatalog = [{ root: ${JSON.stringify(project)}, name: "十五五" }]; });
+      await ensureProjectStore(projectStore, { canvasId: "named-chat", threadId: "named-chat" });
+      await ensureProjectStore(soloStore, { canvasId: "solo-chat", threadId: "solo-chat" });
+      await recordCanvas({ projectDir: projectStore, canvasId: "named-chat", threadId: "named-chat" });
+      const soloId = await recordCanvas({ projectDir: soloStore, canvasId: "solo-chat", threadId: "solo-chat" });
+      const { boards } = await listCanvases();
+      const namedState = await readState(projectStore, { canvasId: "named-chat", readOnly: true });
+      await updateBoardMetadata(soloId, { displayTitle: "墨竹小稿", projectName: "十五五" });
+      const reassigned = await readState(soloStore, { canvasId: "solo-chat" });
+      console.log(JSON.stringify({ boards, namedState, reassigned }));
+    `;
+    const { stdout } = await execFileAsync(process.execPath, ["--input-type=module", "--eval", source], { env, windowsHide: true });
+    const { boards, namedState, reassigned } = JSON.parse(stdout);
+    assert.equal(namedState.title, "服务视频分镜");
+    assert.equal(namedState.projectName, "十五五");
+    const solo = boards.find(board => board.threadId === "solo-chat");
+    assert.equal(solo.projectName, "零散生图");
+    assert.equal(solo.projectKey, "standalone-images");
+    assert.match(solo.title, /^素材画布 · [a-f0-9]{6}$/);
+    assert.equal(reassigned.title, "墨竹小稿");
+    assert.equal(reassigned.projectKey, process.platform === "win32" ? project.replaceAll("\\", "/").toLowerCase() : project);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});

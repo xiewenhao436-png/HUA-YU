@@ -15,7 +15,7 @@ import { addImage, addObject, deleteObject, deleteObjects, ensureProjectStore, m
 import { canvasIdForThread, normalizeThreadId } from "./runtime.mjs";
 import { appUpdateStatus, updateApp } from "./updater.mjs";
 import { APP_VERSION } from "./version.mjs";
-import { setBoardHidden, setProjectHidden, updateBoardMetadata, recordCanvas, listCanvases, assertBoardAvailable, boardScopeKey } from "./canvas-index.mjs";
+import { setBoardHidden, setProjectHidden, updateBoardMetadata, recordCanvas, listCanvases, assertBoardAvailable, boardScopeKey, canvasIdentity, boardIdFor } from "./canvas-index.mjs";
 import { trashBoard, restoreBoard, permanentlyDeleteBoard, onBoardTrashed } from "./canvas-trash.mjs";
 import { CANVAS_LIBRARY_ACTIONS, browseBoard, libraryAsset, importBoardImages } from "./canvas-library.mjs";
 
@@ -38,13 +38,13 @@ const browserLibraryActions = Object.freeze(CANVAS_LIBRARY_ACTIONS.filter(action
 
 // The MCP App shares the same handlers as the browser, without binding a port.
 // Each session owns exactly one explicitly opened project/thread scope.
-export async function createAppSession({ projectDir, threadId = null, autoCollect = true, canvasId = null } = {}) {
+export async function createAppSession({ projectDir, threadId = null, autoCollect = true, canvasId = null, identity } = {}) {
   const registry = createProjectRegistry({
     host: "127.0.0.1", port: 0, autoCollect,
     maxJsonBodyBytes: defaultMaxJsonBodyBytes,
     generatedImagesRoot: defaultGeneratedImagesRoot(), hasActiveJobs: hasActiveCanvasJobs
   });
-  const project = await registerProject(registry, projectDir, { autoCollect, chatThreadId: threadId, canvasId });
+  const project = await registerProject(registry, projectDir, { autoCollect, chatThreadId: threadId, canvasId, identity });
   let closed = false;
   const close = () => { closed = true; stopAutoCollector(project); unsubscribe(); };
   const unsubscribe = onBoardTrashed(async board => {
@@ -215,7 +215,8 @@ async function handleRequest(request, response, context) {
     const projectDir = requireHttpProjectDir(body.projectDir);
     const project = await registerProject(context.registry, projectDir, {
       autoCollect: body.autoCollect !== false,
-      chatThreadId: body.chatThreadId || body.threadId || null
+      chatThreadId: body.chatThreadId || body.threadId || null,
+      identity: { displayTitle: body.displayTitle, projectOverride: body.projectName }
     });
     await writeProjectRuntime(context.registry, project);
     await persistProjectRegistrySafely(context.registry);
@@ -236,8 +237,8 @@ async function handleRequest(request, response, context) {
     if (body.action === "project-visibility") return sendJson(response, 200, await setProjectHidden(body.projectRoot, body.hidden));
     if (body.action === "trash") return sendJson(response, 200, await trashBoard(body.boardId));
     if (body.action === "restore") return sendJson(response, 200, await restoreBoard(body.boardId));
-    if (["rename", "importance"].includes(body.action)) return sendJson(response, 200, await updateBoardMetadata(body.boardId, body.action === "rename" ? { displayTitle: body.displayTitle } : { importance: body.importance }));
-    if (body.action === "copy-board") return sendJson(response, 200, await copyBoardToProject(body.boardId, body.targetProject));
+    if (["rename", "importance"].includes(body.action)) return sendJson(response, 200, await updateBoardMetadata(body.boardId, body.action === "rename" ? { displayTitle: body.displayTitle, projectName: body.projectName } : { importance: body.importance }));
+    if (body.action === "copy-board") return sendJson(response, 200, await copyBoardToProject(body.boardId, body.targetProject, body.projectKey));
     if (body.action === "delete-permanently") return sendJson(response, 200, await permanentlyDeleteBoard(body.boardId, { confirmed: body.confirmed }));
     if (body.action === "browse") return sendJson(response, 200, await browseBoard(body.boardId));
     if (body.action === "asset") return sendJson(response, 200, await libraryAsset(body.boardId, body.objectId, body.original === true));
@@ -259,6 +260,7 @@ async function handleRequest(request, response, context) {
     });
     return sendJson(response, 200, {
       ...state,
+      ...await canvasIdentity(projectDir, project.canvasId, state, { threadId: project.chatThreadId }),
       canvasScope: {
         projectId: project.id,
         canvasId: project.canvasId || null,
@@ -297,6 +299,8 @@ async function handleRequest(request, response, context) {
   if (request.method === "POST" && pathname === "/api/state") {
     const body = await readJson(request, context.registry);
     if (body.title !== undefined) {
+      const boardId = boardIdFor(projectDir, project.canvasId);
+      await updateBoardMetadata(boardId, { displayTitle: body.title });
       return sendJson(response, 200, await updateProjectMeta(projectDir, body, storeOptionsFor(project)));
     }
     return sendJson(response, 200, await updateViewport(projectDir, body.viewport || {}, storeOptionsFor(project)));
@@ -726,12 +730,12 @@ function assertExpectedCanvasScope(project, body = {}) {
   throw error;
 }
 
-async function registerProject(registry, projectDir, { autoCollect = true, chatThreadId = null, canvasId: explicitCanvasId = null, registeredAt = null } = {}) {
+async function registerProject(registry, projectDir, { autoCollect = true, chatThreadId = null, canvasId: explicitCanvasId = null, registeredAt = null, identity } = {}) {
   const resolvedProjectDir = path.resolve(projectDir || process.cwd());
   const normalizedThreadId = normalizeThreadId(chatThreadId);
   const canvasId = normalizeThreadId(explicitCanvasId) || canvasIdForThread(normalizedThreadId);
   await assertBoardAvailable(resolvedProjectDir, canvasId);
-  await ensureProjectStore(resolvedProjectDir, { canvasId });
+  await ensureProjectStore(resolvedProjectDir, { canvasId, threadId: normalizedThreadId, ...identity });
   const id = projectIdFor(resolvedProjectDir, canvasId);
   const existing = registry.projects.get(id);
   if (existing) {

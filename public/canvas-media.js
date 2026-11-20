@@ -31,6 +31,7 @@ export function installCanvasMedia(host) {
   let menuObject = null;
   let menuFocus = null;
   let menuInvoker = null;
+  let copiedImage = null;
 
   function labelControls() {
     const labels = {
@@ -212,20 +213,51 @@ export function installCanvasMedia(host) {
   window.addEventListener("blur", stopPan);
   new ResizeObserver(() => { if (preview?.mode === "fit") fit(); }).observe(stage);
 
-  async function copy(object) {
+  async function copy(object, additional = []) {
     if (!object) return;
+    const originals = [object, ...additional];
+    const original = Promise.all(originals.map(async item => {
+      const blob = await host.blob(item);
+      return new File([blob], item.name || "canvas-image", { type: blob.type });
+    }));
+    original.catch(() => {});
+    const entry = { scope: JSON.stringify(host.scope?.()), marker: null, files: null };
+    copiedImage = entry;
     try {
-      if (!navigator.clipboard?.write || !window.ClipboardItem) throw new DOMException("Clipboard unavailable", "NotAllowedError");
+      if (additional.length || !navigator.clipboard?.write || !window.ClipboardItem) throw new DOMException("Image clipboard unavailable", "NotAllowedError");
       // Start write during the user gesture, before any asset fetch/conversion.
-      const png = host.blob(object).then(asPng);
+      const png = original.then(([file]) => asPng(file));
       png.catch(() => {});
       await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
       host.toast(zh("图片已复制，可粘贴到其他应用。", "Image copied. Paste it into another app."));
     } catch (error) {
+      if (copiedImage !== entry) return;
+      if (error?.name === "NotAllowedError") {
+        // Require a matching clipboard marker so unrelated pastes never reuse a stale image.
+        try {
+          const token = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, "0")).join("");
+          const marker = `huayu-image:${token}`;
+          const written = host.copyText(marker).then(() => true, () => false);
+          const [files, hasMarker] = await Promise.all([original, written]);
+          if (copiedImage !== entry) return;
+          entry.files = files;
+          entry.marker = hasMarker ? marker : null;
+          host.toast(hasMarker
+            ? zh("图片已复制，可在当前画屿画布粘贴。", "Image copied for pasting in this Canvas view.")
+            : zh("图片已复制到画屿。请在画布上右键粘贴。", "Images copied within Canvas. Right-click the board to paste."));
+          return;
+        } catch { entry.marker = null; }
+      }
       host.toast(error?.name === "NotAllowedError"
         ? zh("当前宿主未允许复制图片，请用“另存原图”。", "Image clipboard access unavailable. Use Save original.")
         : zh("图片复制失败，请重试或使用“另存原图”。", "Could not copy the image. Retry or use Save original."));
     }
+  }
+  function localClipboard() {
+    return host.ready() && copiedImage?.files && copiedImage.scope === JSON.stringify(host.scope?.()) ? copiedImage : null;
+  }
+  function pasteLocalImages(entry) {
+    host.upload(entry.files, { source: "paste" }).catch(error => host.toast(error.message));
   }
   async function save(object) {
     if (!object) return;
@@ -250,10 +282,14 @@ export function installCanvasMedia(host) {
     menuFocus = document.activeElement;
     menuInvoker = invoker;
     menu.replaceChildren();
-    const entries = [
+    const entries = object ? [
       ["preview", zh("放大预览", "Open preview")], ["copy", zh("复制图片", "Copy image")],
       ["save", zh("另存原图", "Save original")], ["prompt", zh("复制画面的生成提示词", "Copy generation prompt")]
-    ];
+    ] : [];
+    const clipboard = localClipboard();
+    if (!preview && clipboard && !clipboard.marker) {
+      entries.push(["paste-image", zh("粘贴画屿已复制的图片", "Paste images copied within Canvas")]);
+    }
     for (const [action, label] of entries) {
       const button = document.createElement("button");
       button.type = "button";
@@ -279,12 +315,17 @@ export function installCanvasMedia(host) {
     if (action === "copy") copy(object);
     if (action === "save") save(object);
     if (action === "prompt") copyPrompt(object);
+    if (action === "paste-image") {
+      const entry = localClipboard();
+      if (entry) pasteLocalImages(entry);
+    }
   });
   document.addEventListener("contextmenu", event => {
     if (host.editable(event.target)) return;
     const id = event.target.closest(".canvas-object")?.dataset.id;
     const object = preview && stage.contains(event.target) ? preview.objects[preview.index] : host.objects().find(item => item.id === id && (item.type || "image") === "image");
-    if (!object) return;
+    const clipboard = localClipboard();
+    if (!object && (!host.board.contains(event.target) || preview || !clipboard || clipboard.marker)) return;
     event.preventDefault();
     event.stopPropagation();
     openMenu(object, event.clientX, event.clientY, event.target);
@@ -300,11 +341,23 @@ export function installCanvasMedia(host) {
         return;
       }
     }
+    if (!event.defaultPrevented && !event.isComposing && !event.altKey && !event.shiftKey
+      && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c"
+      && !host.editable(event.target) && !window.getSelection()?.toString()) {
+      const ids = host.ready() && !preview ? host.selection() : [];
+      const selected = host.objects().filter(item => ids.includes(item.id) && (item.type || "image") === "image" && item.src);
+      const object = preview?.objects[preview.index] || selected[0];
+      if (object) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (!event.repeat) copy(object, selected.slice(1));
+        return;
+      }
+    }
     if (!preview) return;
     if (event.key === "Escape") close();
     else if (event.key === "ArrowLeft") navigate(-1);
     else if (event.key === "ArrowRight") navigate(1);
-    else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") copy(preview.objects[preview.index]);
     else if (event.key === "0") fit();
     else if (event.key === "1") actual();
     else if (["Tab", "Enter", " "].includes(event.key) && event.target.closest("button")) { event.stopImmediatePropagation(); return; }
@@ -312,20 +365,31 @@ export function installCanvasMedia(host) {
     event.stopImmediatePropagation();
   }, { capture: true });
   document.addEventListener("paste", event => {
-    if (preview || !menu.hidden) return;
+    if (event.defaultPrevented || preview || !menu.hidden) return;
     if (host.editable(event.target) || !host.ready()) return;
     const data = event.clipboardData;
     if (!data) return;
-    const files = [...data.files].filter(host.imageCandidate);
+    const fileEntries = [...(data.files || [])];
+    const files = (fileEntries.length ? fileEntries : [...(data.items || [])]
+      .filter(item => item.kind === "file").map(item => item.getAsFile()).filter(Boolean)).filter(host.imageCandidate);
     if (files.length) {
       event.preventDefault();
       host.upload(files, { source: "paste" }).catch(error => host.toast(error.message));
       return;
     }
-    if (data.files.length) return;
+    if (fileEntries.length) return;
     const text = data.getData("text/plain").replace(/\r\n?/g, "\n");
     if (!text.trim()) return;
     event.preventDefault();
+    const entry = localClipboard();
+    if (entry?.marker === text) {
+      pasteLocalImages(entry);
+      return;
+    }
+    if (/^huayu-image:[0-9a-f]{32}$/i.test(text)) {
+      host.toast(zh("这张画屿图片已不在当前复制记录中。", "This Canvas image is no longer available in the current view."));
+      return;
+    }
     host.pasteText(text).catch(error => host.toast(error.message));
   });
   const hasFiles = event => [...(event.dataTransfer?.types || [])].includes("Files");

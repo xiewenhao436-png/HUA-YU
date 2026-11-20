@@ -48,7 +48,11 @@ export async function main(args, context = {}) {
     const defaultUrl = `http://${host}:${port}/`;
     const autoCollect = options["no-auto-collect"] !== true;
     const chatThreadId = normalizeThreadId(optionValue(options, ["thread-id", "threadId"], "--thread-id") || environmentThreadId());
-    await ensureProjectStore(projectDir, { canvasId: canvasIdForThread(chatThreadId) });
+    await ensureProjectStore(projectDir, {
+      canvasId: canvasIdForThread(chatThreadId),
+      displayTitle: optionValue(options, ["title"], "--title"),
+      projectOverride: optionValue(options, ["project-name"], "--project-name")
+    });
     const runtime = await readRuntime(projectDir);
     const existingUrl = await openExistingCanvas(runtime?.url, projectDir, {
       autoCollect,

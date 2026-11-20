@@ -12,6 +12,7 @@ const paths = {
   refresh: ["M20 7v5h-5", "M4 17v-5h5", "M6.1 7a7 7 0 0 1 11.55-2.61L20 7", "M4 17l2.35 2.61A7 7 0 0 0 17.9 17"],
   more: ["M5 12h.01", "M12 12h.01", "M19 12h.01"],
   arrow: ["M7 17 17 7", "M7 7h10v10"],
+  star: ["M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2Z"],
   restore: ["M3 10h6", "M3 10V4", "M3.8 9a9 9 0 1 1 2.8 10", "M12 7v5l3 2"],
   close: ["M18 6 6 18", "M6 6l12 12"],
   image: ["M3 3h18v18H3z", "M3 15l5-5 4 4 3-3 6 6", "M16 7h.01"]
@@ -26,8 +27,9 @@ function action(text, symbol, run, cls = "") {
   const b = node("button", `center-button ${cls}`); b.type = "button";
   if (symbol) b.append(icon(symbol)); b.append(node("span", "", text)); b.onclick = run; return b;
 }
-const nameOf = b => b.title && b.title !== "Untitled" ? b.title : b.threadTitle || "未命名画布";
-const projectName = root => root.split(/[\\/]/).filter(Boolean).at(-1) || "未归属项目";
+const usableName = value => typeof value === "string" && !/^untitled$/i.test(value.trim()) ? value.trim() : "";
+export const canvasName = board => usableName(board?.title) || usableName(board?.threadTitle) || "画布";
+const nameOf = canvasName;
 const previewCache = new Map();
 const cleanups = new WeakMap();
 
@@ -67,6 +69,7 @@ export async function showProjectCanvasCenter({ container, call, threadId, isBou
   const title = node("h1", "", "让灵感，自由生长"); const subtitle = node("p", "", "在画屿，收集每一个值得继续的想法");
   headingCopy.append(eyebrow, title, subtitle);
   const newButton = action("新建画布", "plus", showCreate, "center-primary");
+  newButton.disabled = true;
   heading.append(headingCopy);
   const tools = node("div", "center-tools"); const searchWrap = node("label", "center-search-wrap");
   const search = node("input", "library-search center-search"); search.type = "search"; search.placeholder = "搜索画布、会话或项目"; search.setAttribute("aria-label", "搜索画布");
@@ -82,6 +85,7 @@ export async function showProjectCanvasCenter({ container, call, threadId, isBou
   const toast = node("div", "center-toast"); toast.hidden = true; toast.setAttribute("role", "status");
   main.append(heading, tools, upgrade, status, list); shell.append(rail, main); container.append(shell, toast, menu, confirm, create);
   let data = { boards: [], trash: [], threads: [] }, view = "all", project = "", busy = false;
+  const pendingRatings = new Set();
   const languageLabels = { '隐藏项目':'Hidden projects', '可恢复的画布':'Recoverable canvases', '项目画布':'Project canvases', '恢复项目':'Restore project', '全部项目':'All projects', '项目':'Projects', '已隐藏':'Hidden', '回收站':'Trash', '工作区':'Workspace', '新建画布':'New canvas', '刷新':'Refresh', '最近更新':'Recently updated', '名称顺序':'Name', '让灵感，自由生长':'Let ideas grow freely', '在画屿，收集每一个值得继续的想法':'Collect every idea worth exploring in Huayu' };
   const originalLabels = new WeakMap();
   let centerLanguage = 'zh';
@@ -97,6 +101,9 @@ export async function showProjectCanvasCenter({ container, call, threadId, isBou
       if (original) { const value = next === 'en' ? languageLabels[original] : original; if (text.textContent !== value) text.textContent = value; }
     }
     search.placeholder = next === 'en' ? 'Search canvases, chats or projects' : '搜索画布、会话或项目';
+    for (const rating of list.querySelectorAll(".center-card-rating")) {
+      paintRating(rating, Number(rating.dataset.value));
+    }
   }
   installHomeSettings({ rail, call, signal, onLanguage: applyCenterLanguage });
 
@@ -121,8 +128,8 @@ export async function showProjectCanvasCenter({ container, call, threadId, isBou
     hiddenButton.classList.toggle("active", view === "hidden");
     projectList.replaceChildren();
     for (const group of groups) {
-      const b = action(projectName(group.root), "folder", () => selectView("project", group.root), "center-nav");
-      b.dataset.centerProject = group.root; b.title = group.root; b.classList.toggle("active", view === "project" && project === group.root);
+      const b = action(group.name, "folder", () => selectView("project", group.root), "center-nav");
+      b.dataset.centerProject = group.root; b.title = group.name; b.classList.toggle("active", view === "project" && project === group.root);
       b.append(node("small", "center-count", group.boards.length));
       b.oncontextmenu = event => { event.preventDefault(); showProjectMenu(group.root, event); };
       projectList.append(b);
@@ -133,7 +140,7 @@ export async function showProjectCanvasCenter({ container, call, threadId, isBou
     upgrade.hidden = ["trash", "restore", "delete-permanently"].every(supports);
     const allGroups = groupBoards(data), hiddenRoots = new Set(data.hiddenProjects || []), hiddenBoards = new Set(data.hiddenBoards || []);
     const groups = allGroups.filter(g => !hiddenRoots.has(g.root)).map(g => ({ ...g, boards: g.boards.filter(b => !hiddenBoards.has(b.id)) })).filter(g => g.boards.length); updateNav(groups);
-    title.textContent = view === "trash" ? "回收站" : view === "hidden" ? "隐藏项目" : view === "project" ? projectName(project) : "让灵感，自由生长";
+    title.textContent = view === "trash" ? "回收站" : view === "hidden" ? "隐藏项目" : view === "project" ? allGroups.find(g => g.root === project)?.name || "项目画布" : "让灵感，自由生长";
     eyebrow.textContent = view === "trash" ? "可恢复的画布" : view === "project" ? "项目画布" : "A SPACE FOR IDEAS";
     subtitle.textContent = view === "trash" ? "恢复误删的画布；永久删除需要再次确认。" : "在画屿，收集每一个值得继续的想法";
     newButton.hidden = view === "trash";
@@ -144,12 +151,12 @@ export async function showProjectCanvasCenter({ container, call, threadId, isBou
     const displayed = view === "trash" ? groupBoards({ ...data, boards: data.trash || [] }) : view === "hidden" ? allGroups.map(g => ({ ...g, boards: hiddenRoots.has(g.root) ? g.boards : g.boards.filter(b => hiddenBoards.has(b.id)) })).filter(g => g.boards.length) : groups;
     for (const group of displayed) {
       if (view === "project" && project !== group.root) continue;
-      const boards = group.boards.filter(b => `${nameOf(b)} ${b.threadTitle} ${group.root}`.toLocaleLowerCase().includes(q));
+      const boards = group.boards.filter(b => `${nameOf(b)} ${b.threadTitle} ${group.name} ${group.root}`.toLocaleLowerCase().includes(q));
       if (!boards.length) continue;
       boards.sort((a, b) => sort.value === "name" ? nameOf(a).localeCompare(nameOf(b), "zh-CN") : (b.trashedAt || b.updatedAt || "").localeCompare(a.trashedAt || a.updatedAt || ""));
       count += boards.length;
       const section = node("section", "center-project-section"); section.dataset.projectGroup = group.root;
-      const label = node("header", "center-project-heading"); const h = node("h2", "", projectName(group.root)); h.title = group.root;
+      const label = node("header", "center-project-heading"); const h = node("h2", "", group.name);
       label.append(h, node("span", "", `${boards.length} 个画布`));
       if (view === "hidden" && hiddenRoots.has(group.root)) label.append(action("恢复项目", "restore", () => setHidden(group.root, false)));
       const grid = node("div", "center-card-grid"); for (const board of boards) grid.append(card(board));
@@ -181,13 +188,51 @@ export async function showProjectCanvasCenter({ container, call, threadId, isBou
     if (view !== "trash" && board.coverId) { preview.dataset.previewBoard = board.id; preview._canvasBoard = board; }
     else preview.append(node("span", "", view === "trash" ? (board.purgeStartedAt ? "删除未完成，请重试" : "画布已移入回收站") : "空白画布"));
     const count = node("span", "center-image-count", `${board.imageCount || 0} 张`); preview.append(count);
-    const body = node("div", "center-card-body"); body.append(node("h3", "", nameOf(board)), node("p", "center-card-chat", board.threadTitle || "未绑定会话"));
-    const meta = node("div", "center-card-meta"); meta.append(node("span", "", relativeTime(board.trashedAt || board.updatedAt)), icon("arrow")); body.append(meta);
+    const body = node("div", "center-card-body"); body.append(node("h3", "", nameOf(board)), node("p", "center-card-chat", usableName(board.threadTitle) || "未绑定会话"));
+    const meta = node("div", "center-card-meta");
+    meta.append(node("span", "", relativeTime(board.trashedAt || board.updatedAt)));
+    if (view === "trash") meta.append(icon("arrow"));
+    else meta.classList.add("center-card-meta-rated");
+    body.append(meta);
     open.append(preview, body);
     open.onclick = () => view === "trash" ? showMenu(board, open.getBoundingClientRect()) : openBoard("open", board.id);
     const more = action("画布操作", "more", event => { event.stopPropagation(); showMenu(board, more.getBoundingClientRect()); }, "center-card-more"); more.setAttribute("aria-label", `画布操作：${nameOf(board)}`); more.title = "画布操作";
-    article.append(open, more); article.oncontextmenu = event => { event.preventDefault(); showMenu(board, { x: event.clientX, y: event.clientY }); };
+    article.append(open);
+    if (view !== "trash") article.append(boardRating(board));
+    article.append(more); article.oncontextmenu = event => { event.preventDefault(); showMenu(board, { x: event.clientX, y: event.clientY }); };
     return article;
+  }
+  function boardRating(board) {
+    const rating = node("div", "center-card-rating");
+    rating.setAttribute("role", "group");
+    for (let stars = 1; stars <= 5; stars++) {
+      const button = node("button", "center-rating-star");
+      button.type = "button";
+      button.dataset.rating = String(stars);
+      button.disabled = !supports("importance");
+      button.append(icon("star"));
+      button.onclick = () => saveBoardRating(board, Number(rating.dataset.value) === stars ? 0 : stars);
+      rating.append(button);
+    }
+    rating.setAttribute("aria-busy", String(pendingRatings.has(board.id)));
+    paintRating(rating, board.importance || 0);
+    return rating;
+  }
+  function paintRating(rating, score) {
+    rating.dataset.value = String(score);
+    const english = centerLanguage === "en";
+    rating.setAttribute("aria-label", english ? `Canvas rating: ${score} of 5 stars` : `画布评级，${score} 星`);
+    for (const button of rating.children) {
+      const stars = Number(button.dataset.rating);
+      const current = score === stars;
+      button.classList.toggle("is-lit", stars <= score);
+      button.setAttribute("aria-pressed", String(current));
+      const label = english
+        ? current ? `Clear ${stars}-star rating` : `Rate ${stars} of 5 stars`
+        : current ? `取消当前 ${stars} 星评级` : `评为 ${stars} 星`;
+      button.setAttribute("aria-label", label);
+      button.title = button.disabled ? upgradeMessage : label;
+    }
   }
   function showMenu(board, rect) {
     menu.replaceChildren(); const trashed = view === "trash";
@@ -201,7 +246,7 @@ export async function showProjectCanvasCenter({ container, call, threadId, isBou
       if (board.canRestore !== false && !board.purgeStartedAt) add("恢复画布", "restore", () => changeBoard("restore", board), false, "restore");
       add(board.purgeStartedAt ? "继续永久删除…" : "永久删除…", "trash", () => confirmDelete(board), true, "delete-permanently");
     }
-    else { if (view !== "hidden") add("隐藏画布", "folder", () => setBoardVisibility(board, true), false, "board-visibility"); add("打开画布", "arrow", () => openBoard("open", board.id)); add("重命名", null, () => renameBoard(board), false, "rename"); add("复制到项目…", null, () => copyToProject(board), false, "copy-board"); for (let n = 1; n <= 5; n++) add(`${n} 星${board.importance === n ? " ✓" : ""}`, null, () => editMetadata(board, { importance: n }), false, "importance"); add("移到回收站", "trash", () => changeBoard("trash", board), true, "trash"); }
+    else { if (view !== "hidden") add("隐藏画布", "folder", () => setBoardVisibility(board, true), false, "board-visibility"); add("打开画布", "arrow", () => openBoard("open", board.id)); add("重命名", null, () => renameBoard(board), false, "rename"); add("复制到项目…", null, () => copyToProject(board), false, "copy-board"); for (let n = 1; n <= 5; n++) add(`${n} 星${board.importance === n ? " ✓" : ""}`, null, () => saveBoardRating(board, n), false, "importance"); add("移到回收站", "trash", () => changeBoard("trash", board), true, "trash"); }
     menu.hidden = false;
     const box = menu.getBoundingClientRect(), x = rect.x ?? rect.left, y = rect.height ? rect.bottom + 4 : rect.y;
     menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - box.width - 8))}px`; menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - box.height - 8))}px`;
@@ -212,37 +257,81 @@ export async function showProjectCanvasCenter({ container, call, threadId, isBou
     create.setAttribute("aria-label", "复制画布到项目"); create.replaceChildren();
     create.append(node("h2", "", "复制画布到项目"), node("p", "", "创建独立画布副本，原画布和会话保持不变。"));
     const select = node("select", "library-thread-select"); select.setAttribute("aria-label", "目标项目");
-    for (const group of groups) { const option = node("option", "", `${projectName(group.root)} — ${group.root}`); option.value = group.boards[0].projectDir; select.append(option); }
+    for (const group of groups) { const option = node("option", "", group.name); option.value = group.root; select.append(option); }
     const error = node("p", "center-create-error"); error.setAttribute("role", "alert");
     const controls = node("div", "center-dialog-actions");
-    const submit = action("复制", null, async () => { if (busy || !select.value) return; busy = true; submit.disabled = true; try { await call({ action: "copy-board", boardId: board.id, targetProject: select.value }); create.close(); await load(false, false); notice("画布副本已创建"); } catch (e) { error.textContent = e.message || "复制失败，请重试。"; } finally { busy = false; submit.disabled = false; } }, "center-primary");
+    const submit = action("复制", null, async () => { const target = groups.find(group => group.root === select.value); if (busy || !target) return; busy = true; submit.disabled = true; try { await call({ action: "copy-board", boardId: board.id, targetProject: target.boards[0].projectDir, projectKey: target.root }); create.close(); await load(false, false); notice("画布副本已创建"); } catch (e) { error.textContent = e.message || "复制失败，请重试。"; } finally { busy = false; submit.disabled = false; } }, "center-primary");
     controls.append(action("取消", null, () => create.close()), submit); create.append(select, error, controls); create.showModal(); select.focus();
   }
-  async function editMetadata(board, fields) {
-    if (busy || !alive()) return;
-    busy = true;
-    try { await call({ action: fields.displayTitle !== undefined ? "rename" : "importance", boardId: board.id, ...fields }); await load(false, false); notice("画布信息已保存"); }
-    catch (error) { notice(error.message || "操作没有完成，请重试。"); }
-    finally { busy = false; }
+  async function saveBoardRating(board, importance) {
+    const { id } = board;
+    if (!alive() || !supports("importance") || pendingRatings.has(id) || board.importance === importance) return;
+    const ratingControl = () => list.querySelector(`[data-canvas-id="${CSS.escape(id)}"] .center-card-rating`);
+    pendingRatings.add(id);
+    ratingControl()?.setAttribute("aria-busy", "true");
+    try {
+      await call({ action: "importance", boardId: id, importance });
+      board.importance = importance;
+      const current = data.boards.find(item => item.id === id);
+      if (current) current.importance = importance;
+      const rating = ratingControl();
+      if (alive() && rating) paintRating(rating, importance);
+    } catch (error) {
+      if (alive()) notice(error.message || "评级保存失败，请重试。");
+    } finally {
+      pendingRatings.delete(id);
+      ratingControl()?.setAttribute("aria-busy", "false");
+    }
+  }
+  function nameField(label, value = "") {
+    const field = node("label", "center-name-field");
+    const input = node("input", "library-search");
+    input.type = "text"; input.maxLength = 200; input.value = value; input.required = true;
+    field.append(node("span", "", label), input);
+    return { field, input };
+  }
+  function projectField(value, inputId) {
+    const { field, input } = nameField("所属项目", value);
+    const options = node("datalist"); options.id = inputId;
+    const hidden = new Set(data.hiddenProjects || []);
+    const hiddenBoards = new Set(data.hiddenBoards || []);
+    const groups = groupBoards(data).filter(group => !hidden.has(group.root) && group.boards.some(board => !hiddenBoards.has(board.id)));
+    const registered = (data.projectCatalog || []).filter(project => !hidden.has(project.key)).map(project => project.name);
+    for (const name of new Set(["零散生图", ...registered, ...groups.map(group => group.name)])) {
+      const option = node("option"); option.value = name; options.append(option);
+    }
+    input.setAttribute("list", options.id); field.append(options);
+    return { field, input };
+  }
+  function readNames(title, category, error) {
+    const displayTitle = usableName(title.value);
+    const projectName = usableName(category.value);
+    if (displayTitle && projectName) return { displayTitle, projectName };
+    error.textContent = displayTitle ? "请输入所属项目。" : "请输入画布名称。";
+    (displayTitle ? category : title).focus();
+    return null;
   }
   function renameBoard(board) {
     if (busy) return;
-    create.replaceChildren(); create.setAttribute("aria-label", "重命名画布");
-    const heading = node("h2", "", "重命名画布");
-    const input = node("input", "library-search"); input.type = "text"; input.maxLength = 200; input.value = nameOf(board); input.setAttribute("aria-label", "画布名称");
+    create.replaceChildren(); create.setAttribute("aria-label", "编辑画布信息");
+    const heading = node("h2", "", "编辑画布信息");
+    const { field: titleField, input } = nameField("画布名称", nameOf(board));
+    const { field: categoryField, input: category } = projectField(board.projectName || groupBoards({ ...data, boards: [board] })[0]?.name || "零散生图", "center-rename-projects");
     const error = node("p", "center-create-error"); error.setAttribute("role", "alert");
     const controls = node("div", "center-dialog-actions");
     const save = action("保存", null, async () => {
       if (busy) return;
-      const value = input.value.trim();
-      if (!value) { error.textContent = "请输入画布名称。"; input.focus(); return; }
+      const names = readNames(input, category, error);
+      if (!names) return;
       busy = true; save.disabled = true;
-      try { await call({ action: "rename", boardId: board.id, displayTitle: value }); create.close(); await load(false, false); notice("画布名称已保存"); }
-      catch (e) { error.textContent = e.message || "重命名失败，请重试。"; }
+      try { await call({ action: "rename", boardId: board.id, ...names }); create.close(); await load(false, false); notice("画布信息已保存"); }
+      catch (e) { error.textContent = e.message || "保存失败，请重试。"; }
       finally { busy = false; save.disabled = false; }
     }, "center-primary");
-    input.addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); save.click(); } });
-    controls.append(action("取消", null, () => create.close()), save); create.append(heading, input, error, controls); create.showModal(); input.focus(); input.select();
+    for (const field of [input, category]) field.addEventListener("keydown", event => {
+      if (event.key === "Enter" && !event.isComposing) { event.preventDefault(); save.click(); }
+    });
+    controls.append(action("取消", null, () => create.close()), save); create.append(heading, titleField, categoryField, error, controls); create.showModal(); input.focus(); input.select();
   }
   async function changeBoard(actionName, board, confirmed = false) {
     if (busy || !alive()) return false;
@@ -262,7 +351,7 @@ export async function showProjectCanvasCenter({ container, call, threadId, isBou
     confirm.replaceChildren(); const badge = node("div", "center-delete-icon"); badge.append(icon("trash"));
     const title = node("h2", "", "永久删除这张画布？");
     const description = node("p", "", board.purgeStartedAt ? "上次永久删除未完成，将继续清理这张画布及其画布素材副本。此操作无法撤销。" : "将删除这张画布及其画布素材副本。此操作无法撤销。");
-    const summary = node("div", "center-delete-summary"); summary.append(node("strong", "", nameOf(board)), node("span", "", `${board.imageCount || 0} 张图片 · ${projectName(groupBoards({ ...data, boards: [board] })[0]?.root || "")}`));
+    const summary = node("div", "center-delete-summary"); summary.append(node("strong", "", nameOf(board)), node("span", "", `${board.imageCount || 0} 张图片 · ${groupBoards({ ...data, boards: [board] })[0]?.name || "零散生图"}`));
     const controls = node("div", "center-dialog-actions");
     const cancel = action("取消", null, () => confirm.close());
     const remove = action("永久删除", null, async () => { remove.disabled = cancel.disabled = true; try { if (await changeBoard("delete-permanently", board, true)) confirm.close(); } finally { remove.disabled = cancel.disabled = false; } }, "center-destructive");
@@ -271,21 +360,48 @@ export async function showProjectCanvasCenter({ container, call, threadId, isBou
   function showCreate() {
     if (busy) return;
     create.setAttribute("aria-label", "新建画布"); create.replaceChildren(); const heading = node("div", "center-create-heading"); heading.append(node("h2", "", "新建画布"), action("关闭", "close", () => create.close(), "center-icon-button"));
-    const text = node("p", "", "选择所属会话，画布会保存到该会话的项目目录。");
-    const select = node("select", "library-thread-select"); select.setAttribute("aria-label", "画布所属会话");
+    const threadField = node("label", "center-name-field");
+    const select = node("select", "library-thread-select");
+    threadField.append(node("span", "", "所属会话"), select);
     const placeholder = node("option", "", "选择会话"); placeholder.value = ""; select.append(placeholder);
-    for (const thread of data.threads || []) { const option = node("option", "", thread.title || thread.id); option.value = thread.id; select.append(option); }
+    const boundThreads = new Set([...data.boards, ...data.trash].map(board => board.threadId));
+    for (const thread of data.threads || []) {
+      if (!thread.cwd || boundThreads.has(thread.id)) continue;
+      const option = node("option", "", usableName(thread.title) || thread.id); option.value = thread.id; select.append(option);
+    }
     if (data.currentThread?.id) select.value = data.currentThread.id;
-    const location = node("div", "center-create-location"); select.onchange = () => { location.textContent = data.threads.find(t => t.id === select.value)?.cwd || ""; }; select.onchange();
+    if (!select.value) select.selectedIndex = 0;
+    if (select.options.length === 1) {
+      const controls = node("div", "center-dialog-actions");
+      controls.append(action("关闭", null, () => create.close()));
+      create.append(heading, node("p", "", "请从还没有画布的会话打开画屿，再创建画布。"), controls);
+      create.showModal(); return;
+    }
+    const { field: titleField, input } = nameField("画布名称");
+    const { field: categoryField, input: category } = projectField("", "center-create-projects");
+    let suggestedTitle = "", suggestedProject = "";
+    select.onchange = () => {
+      const thread = data.threads?.find(t => t.id === select.value);
+      const board = data.boards?.find(board => board.threadId === select.value);
+      const nextTitle = usableName(thread?.canvasName) || usableName(thread?.title);
+      const nextProject = usableName(thread?.projectName) || usableName(board?.projectName) || "零散生图";
+      if (!input.value || input.value === suggestedTitle) input.value = nextTitle;
+      if (!category.value || category.value === suggestedProject) category.value = nextProject;
+      suggestedTitle = nextTitle; suggestedProject = nextProject;
+    }; select.onchange();
     const error = node("p", "center-create-error"); error.setAttribute("role", "alert");
-    const controls = node("div", "center-dialog-actions"); controls.append(action("取消", null, () => create.close()), action("创建画布", "plus", async () => { if (!select.value) { error.textContent = "请先选择所属会话。"; return; } await openBoard("create", select.value, error); }, "center-primary"));
-    create.append(heading, text, select, location, error, controls); create.showModal(); select.focus();
+    const controls = node("div", "center-dialog-actions"); controls.append(action("取消", null, () => create.close()), action("创建画布", "plus", async () => {
+      if (!select.value) { error.textContent = "请先选择所属会话。"; select.focus(); return; }
+      const names = readNames(input, category, error);
+      if (names) await openBoard("create", select.value, error, names);
+    }, "center-primary"));
+    create.append(heading, threadField, titleField, categoryField, error, controls); create.showModal(); (select.value ? input : select).focus();
   }
-  async function openBoard(actionName, id, errorNode) {
+  async function openBoard(actionName, id, errorNode, names) {
     if (busy || !alive()) return;
     busy = true; status.textContent = "正在打开画布…";
     try {
-      const result = await call({ action: actionName, ...(actionName === "create" ? { threadId: id } : { boardId: id, threadId }) });
+      const result = await call({ action: actionName, ...(actionName === "create" ? { threadId: id, ...names } : { boardId: id, threadId }) });
       if (!alive()) return;
       // Close modal surfaces before the editor becomes visible.
       if (create.open) create.close();
@@ -300,6 +416,7 @@ export async function showProjectCanvasCenter({ container, call, threadId, isBou
       const result = await call({ action: "bootstrap", threadId, refresh: refreshScan });
       if (!alive()) return;
       data = result.structuredContent || result; data.trash ||= [];
+      newButton.disabled = false;
       if (allowAutoOpen && data.suggestedBoardId && data.callerThreadId) { await openBoard("open", data.suggestedBoardId); return; }
       render();
     } catch (error) { status.textContent = error.message || "画布列表未能加载。点击刷新重试。"; }

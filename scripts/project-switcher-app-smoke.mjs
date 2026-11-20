@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { selectProjectCanvases } from "../public/canvas-library.js";
+import { groupedCanvasSwitcher, selectProjectCanvases } from "../public/canvas-library.js";
+import { canvasName } from "../public/canvas-center.js";
 import { createMcpClient } from "./mcp-app-client.mjs";
 import { mountApp } from "./app-test-host.mjs";
 
@@ -16,6 +17,18 @@ const windowsBoards = [
 assert.deepEqual(selectProjectCanvases({ boards: windowsBoards }, { ...windowsBoards[1], boardId: "alias" }).boards.map(b => b.id), ["alias", "b"]);
 assert.equal(selectProjectCanvases({ boards: [{ id: "a", projectDir: "/work/Film/_codex/a" }, { id: "b", projectDir: "/work/film/_codex/b" }] }, { boardId: "a" }).boards.length, 1, "POSIX paths remain case sensitive");
 assert.equal(selectProjectCanvases({ boards: [{ id: "a", projectDir: "/work/film/boards/a", threadId: "a" }, { id: "b", projectDir: "/work/film/boards/b", threadId: "b" }], threads: [{ id: "a", cwd: "/work/film" }, { id: "b", cwd: "/work/film" }] }, { boardId: "a" }).boards.length, 2);
+const grouped = groupedCanvasSwitcher({
+  boards: [
+    { id: "first", projectDir: "/work/first", projectName: "零散生图", projectKey: "standalone-images" },
+    { id: "current", projectDir: "/work/second", projectName: "零散生图", projectKey: "standalone-images" },
+    { id: "hidden-board", projectDir: "/work/third", projectName: "零散生图", projectKey: "standalone-images" },
+    { id: "hidden-project", projectDir: "/work/hidden" }
+  ],
+  hiddenBoards: ["hidden-board"],
+  hiddenProjects: ["/work/hidden"]
+}, { boardId: "current" });
+assert.deepEqual(grouped.map(group => [group.name, group.boards.map(board => board.id)]), [["零散生图", ["current", "first"]]]);
+assert.equal(canvasName({ title: " UNTITLED ", threadTitle: "项目草稿" }), "项目草稿");
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ? pathToFileURL(process.env.PLAYWRIGHT_MODULE).href : "playwright");
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "canvas-project-switcher-"));
@@ -56,8 +69,12 @@ try {
     await frame.waitForFunction(title => document.querySelector("#projectTitle")?.value === title && document.querySelector("#objects img")?.naturalWidth === 1, definitions[0].title);
     await frame.locator(".project-header > button").first().click();
     await frame.waitForSelector("#projectMenu [data-board-id]");
-    assert.equal(await frame.locator("#projectMenu [data-board-id]").count(), 3);
-    assert.equal(await frame.locator(`#projectMenu [data-board-id="${boards.outside.id}"]`).count(), 0);
+    assert.equal(await frame.locator("#projectMenu [data-board-id]").count(), 4);
+    assert.equal(await frame.locator("#projectMenu .project-menu-group").count(), 2);
+    assert.equal(await frame.locator("#projectMenu .project-menu-group[open]").count(), 1);
+    assert.equal(await frame.locator("#projectMenu .project-menu-group[open] [data-board-id]").count(), 3);
+    assert.equal(await frame.locator(`#projectMenu [data-board-id="${boards.outside.id}"]`).count(), 1);
+    assert.equal(await frame.locator(`#projectMenu [data-board-id="${boards.outside.id}"]`).isVisible(), false);
     assert.equal(await frame.locator("#projectMenu .project-menu-current").count(), 1);
     assert.equal(await frame.locator("#projectMenu .active").getAttribute("data-board-id"), boards.a.id);
     await page.screenshot({ path: path.join(artifactDir, `project-switcher-${width}.png`) });
@@ -69,11 +86,9 @@ try {
     await frame.locator("#objects .canvas-object").first().click();
     await frame.locator(".project-header > button").first().click();
     await frame.locator("[data-canvas-home]").click();
-    await frame.getByRole("searchbox", { name: "搜索画布" }).waitFor();
-    assert.equal(await frame.locator("#canvasConnection .center-board-card").count(), 0, "The new home starts without a board list");
-    await frame.getByRole("searchbox", { name: "搜索画布" }).fill("canvas-project-switcher-");
+    await frame.locator("#canvasConnection [data-center-project]").filter({ hasText: "十五五" }).click();
     await frame.waitForSelector("#canvasConnection .library-launcher-list [data-board-id]");
-    assert.equal(await frame.locator("#canvasConnection .library-launcher-list [data-board-id]").count(), 4);
+    assert.equal(await frame.locator("#canvasConnection .library-launcher-list [data-board-id]").count(), 3);
     assert.equal(await frame.evaluate(() => window.codexCanvasApp.inLauncher && !window.codexCanvasApp.active && document.querySelector(".app-shell").inert), true);
     // Replayed chat metadata and hidden-editor shortcuts cannot dismiss the
     // center or change objects on the previously viewed board.
@@ -92,7 +107,7 @@ try {
     await frame.locator('[data-tool="hand"]').click(); await frame.locator('[data-tool="select"]').click();
     assert.equal(await page.evaluate(() => window.chatMessages.length), 0);
     assert.deepEqual(errors, []);
-    summary.push({ width, sameProjectBoards: 3, unrelatedProjectHidden: true, directSwitch: true, independentViewport: true, explicitCenterStaysOpen: true, hiddenCanvasProtected: true, returnToSavedCanvas: true, chatTurns: 0, errors });
+    summary.push({ width, groupedProjects: 2, sameProjectBoards: 3, directSwitch: true, independentViewport: true, explicitCenterStaysOpen: true, hiddenCanvasProtected: true, returnToSavedCanvas: true, chatTurns: 0, errors });
     await page.close();
   }
   for (const item of definitions) assert.deepEqual((await api(boards[item.id].opened, "/api/state")).body.objects, boards[item.id].before.objects);
