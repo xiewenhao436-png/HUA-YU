@@ -3395,3 +3395,165 @@ button {
 .center-home-settings .update-available { color: #7056a5; }
 
 .settings-menu-row[hidden] { display: none; }
+.lineage-edges {
+  position: absolute;
+  inset: 0;
+  z-index: 18;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.lineage-edges path {
+  fill: none;
+  stroke: #4667c5;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.lineage-edges path.reference {
+  stroke: #687fb8;
+  stroke-dasharray: 6 5;
+}
+
+.lineage-edges path.active {
+  stroke: #315ce1;
+  stroke-width: 3;
+}
+
+.canvas-object.lineage-target {
+  outline: 3px solid #4667c5;
+  outline-offset: 4px;
+}
+
+.lineage-strip {
+  position: absolute;
+  z-index: 31;
+  top: 0;
+  left: 0;
+  width: max-content;
+  max-width: min(408px, calc(100% - 24px));
+  padding: 5px;
+  border: 1px solid rgba(28, 31, 36, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 8px 18px rgba(22, 25, 30, 0.1);
+}
+
+.lineage-strip,
+.reference-composer-images {
+  display: flex;
+  gap: 5px;
+  overflow-x: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.lineage-strip[hidden],
+.reference-composer-panel[hidden],
+.quick-edit-composer.reference-mode .quick-edit-markup-controls {
+  display: none;
+}
+
+.reference-composer-panel strong {
+  display: block;
+  padding: 0 0 6px;
+  font-size: 12px;
+}
+
+.reference-composer-images {
+  padding-bottom: 4px;
+}
+
+.reference-base-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  margin: 5px 0 0;
+  color: #39435c;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.reference-base-option input {
+  margin: 0;
+  accent-color: #4667c5;
+}
+
+.lineage-strip .reference-thumbnail,
+.reference-composer-images .reference-thumbnail {
+  display: grid;
+  grid-template-rows: 34px auto;
+  flex: 0 0 68px;
+  min-width: 0;
+  gap: 3px;
+  padding: 3px;
+  color: #39435c;
+  background: #f3f5f9;
+  border: 1px solid #e7ebf2;
+  border-radius: 6px;
+  font: inherit;
+  text-align: center;
+}
+
+button.reference-thumbnail:hover,
+button.reference-thumbnail:focus-visible {
+  border-color: #4667c5;
+  background: #edf2ff;
+}
+
+.reference-thumbnail img {
+  width: 100%;
+  height: 34px;
+  object-fit: contain;
+}
+
+.reference-thumbnail span {
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.reference-thumbnail.missing {
+  grid-template-rows: auto;
+  align-content: center;
+  flex-basis: 100px;
+}
+
+.reference-thumbnail.missing span {
+  white-space: normal;
+}
+
+.lineage-strip .lineage-return {
+  position: sticky;
+  left: 0;
+  flex: 0 0 30px;
+  padding: 4px;
+  border: 1px solid #e7ebf2;
+  border-radius: 6px;
+  color: #39435c;
+  background: #f3f5f9;
+}
+
+.lineage-strip .lineage-return:hover,
+.lineage-strip .lineage-return:focus-visible {
+  border-color: #4667c5;
+  background: #edf2ff;
+}
+
+.quick-edit-composer.reference-mode .reference-composer-panel,
+.quick-edit-composer.reference-mode textarea {
+  grid-column: 1 / -1;
+}
+
+.quick-edit-composer.reference-mode .quick-edit-actions {
+  grid-column: 1 / -1;
+}
+
+.selection-toolbar.has-layer-group-actions [data-action="reference-generate"] {
+  grid-column: 6 / span 3;
+  grid-row: 2;
+}

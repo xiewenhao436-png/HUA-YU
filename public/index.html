@@ -77,6 +77,8 @@
             <div id="world" class="world">
               <div id="objects" class="objects"></div>
             </div>
+            <svg id="lineageEdges" class="lineage-edges" aria-hidden="true"></svg>
+            <div id="lineageStrip" class="lineage-strip" role="group" hidden></div>
             <div id="selectionToolbar" class="selection-toolbar" hidden>
               <button data-action="quick-edit" data-tooltip="Quick Edit" title="Quick Edit" aria-label="Quick Edit">
                 <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -90,6 +92,27 @@
                   <path d="M11 3H9" />
                 </svg>
                 <span>Quick Edit</span>
+              </button>
+              <button data-action="bind-text" hidden>
+                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                </svg>
+                <span>Bind text</span>
+              </button>
+              <button data-action="unbind-text" hidden>
+                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m18.84 12.25 1.7-1.71a5 5 0 0 0-7.08-7.08l-1.71 1.7m-6.59 6.59-1.7 1.71a5 5 0 0 0 7.08 7.08l1.71-1.7M2 2l20 20"/>
+                </svg>
+                <span>Unbind text</span>
+              </button>
+              <button data-action="reference-generate" title="Generate from references" aria-label="Generate from references">
+                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="6" y="3" width="15" height="15" rx="2" />
+                  <path d="M3 7v12a2 2 0 0 0 2 2h12m-8-7 3-3 3 3 2-2 4 4" />
+                  <circle cx="16" cy="8" r="1" />
+                </svg>
+                <span>Generate from references</span>
               </button>
               <button data-action="remove-bg" data-tooltip="Remove BG" title="Remove BG" aria-label="Remove BG">
                 <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -225,6 +248,14 @@
                   <button type="button" data-expand-ratio="4:5" role="radio" aria-checked="false">4:5</button>
                   <button type="button" data-expand-ratio="5:4" role="radio" aria-checked="false">5:4</button>
                 </div>
+              </div>
+              <div id="referenceComposerPanel" class="reference-composer-panel" hidden>
+                <strong data-i18n="referenceGenerate">Generate from references</strong>
+                <div id="referenceComposerImages" class="reference-composer-images" role="group"></div>
+                <label class="reference-base-option">
+                  <input id="referenceUseFirstAsBase" type="checkbox">
+                  <span data-i18n="referenceUseFirstAsBase">Use the first image as the base</span>
+                </label>
               </div>
               <textarea id="quickEditPrompt" rows="2" autocomplete="off" spellcheck="true" data-i18n-placeholder="quickEditPlaceholder" placeholder="Describe your edit here"></textarea>
               <div id="quickEditHint" class="quick-edit-hint" data-i18n="quickEditHint">

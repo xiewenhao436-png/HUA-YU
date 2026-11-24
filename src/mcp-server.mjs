@@ -7,9 +7,9 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { main as cliMain, normalizePort } from "./cli.mjs";
 import { collectRecentImages } from "./collector.mjs";
-import { sendImageToBoundChat, sendMentionToBoundChat } from "./codex-chat.mjs";
-import { createImageJob } from "./jobs.mjs";
-import { addImage, promptHistory, readState, searchObjects, versionGroups } from "./store.mjs";
+import { readChatReferenceImages, sendImageToBoundChat, sendMentionToBoundChat } from "./codex-chat.mjs";
+import { createImageJob, maxReferenceImages } from "./jobs.mjs";
+import { addImage, prepareReferenceImages, promptHistory, readState, searchObjects, versionGroups } from "./store.mjs";
 import { pluginRoot, resolveProjectDir } from "./paths.mjs";
 import { canvasIdForThread, normalizeThreadId } from "./runtime.mjs";
 import { APP_VERSION } from "./version.mjs";
@@ -159,10 +159,31 @@ async function handle(method, params) {
               autoGroupTitle: { type: "string", description: "Canvas heading for the imported image group." },
               prompt: { type: "string" },
               imagegenPrompt: { type: "string", description: "Full prompt sent to the image generation runner, when available." },
+              sourceObjectId: { type: "string", description: "Same-canvas image ID actually used as the editable base." },
+              referenceObjectIds: { type: "array", items: { type: "string" }, description: "Same-canvas image IDs actually supplied as references, in input order." },
               threadId: { type: "string", description: "Codex thread id whose canvas should receive the image. Pass this explicitly for thread-scoped canvases; omitted means the default project canvas." },
               canvasId: { type: "string", description: "Explicit 画屿 canvas id. Overrides the canvas id derived from threadId." }
             }
           }
+        },
+        {
+          name: "prepare_reference_images",
+          title: "准备画屿生图参考",
+          description: "Resolve only the images explicitly chosen for generation in this 画屿 board. Reuse an existing image with identical bytes, or import a new one. Returns canvas ids and local asset paths in input order. Does not generate an image or send a chat message.",
+          inputSchema: { type: "object", required: ["projectDir", "images"], properties: {
+            projectDir: { type: "string", description: "Absolute path of the active 画屿 board's project." },
+            threadId: { type: "string", description: "Current Codex thread owning the board and any chat attachments." },
+            canvasId: { type: "string", description: "Active 画屿 canvas id, if explicitly known." },
+            turnId: { type: "string", description: "Exact turn id only when the user identifies an earlier message. Never guess it." },
+            userMessageText: { type: "string", description: "Exact text of the current user message. Required for chat attachments unless turnId is provided." },
+            images: { type: "array", minItems: 1, maxItems: maxReferenceImages, items: { type: "object", oneOf: [
+              { required: ["objectId"] }, { required: ["path"] }, { required: ["attachmentIndex"] }
+            ], properties: {
+              objectId: { type: "string", description: "Image already selected on this 画屿 board." },
+              path: { type: "string", description: "Absolute local image path explicitly provided for this generation." },
+              attachmentIndex: { type: "integer", minimum: 1, description: "1-based image position in the specified Codex user message, excluding text and non-image items." }
+            }, additionalProperties: false } }
+          } }
         },
         {
           name: "project_references",
@@ -273,10 +294,12 @@ async function handle(method, params) {
               objectId: { type: "string", description: "Canvas image object id to edit." },
               action: {
                 type: "string",
-                enum: ["quick-edit", "remove-bg", "expand", "edit-elements"],
+                enum: ["quick-edit", "remove-bg", "expand", "edit-elements", "reference-generate"],
                 description: "Stable 画屿 action id."
               },
-              prompt: { type: "string", description: "Optional user guidance for quick-edit or expand." },
+              prompt: { type: "string", description: "Required generation brief for reference-generate. Optional guidance for quick-edit or expand." },
+              useFirstAsBase: { type: "boolean", description: "For reference-generate, edit the first attachment as the base and use the remaining attachments as references." },
+              referenceObjectIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: maxReferenceImages, uniqueItems: true, description: "For reference-generate, ordered reference image IDs from this canvas. The first ID must equal objectId." },
               threadId: { type: "string", description: "Codex thread id whose canvas owns the selected object. Pass explicitly for thread-scoped canvases." },
               canvasId: { type: "string", description: "Explicit 画屿 canvas id. Overrides the canvas id derived from threadId." }
             }
@@ -408,6 +431,22 @@ async function handle(method, params) {
       return textResult(`已添加图片到画屿：${object.name}`, object);
     }
 
+    if (params.name === "prepare_reference_images") {
+      const projectDir = requireProjectDir(args);
+      const canvas = await resolveCanvasOptions(projectDir, args);
+      const images = requireReferenceInputs(args.images);
+      const indexes = images.flatMap(item => item.attachmentIndex ? [item.attachmentIndex] : []);
+      const attachments = indexes.length ? await readChatReferenceImages(canvas.threadId, {
+        turnId: args.turnId,
+        userMessageText: args.userMessageText,
+        indexes
+      }) : [];
+      let attachmentPosition = 0;
+      const inputs = images.map(item => item.attachmentIndex ? attachments[attachmentPosition++] : item);
+      const references = await prepareReferenceImages(projectDir, inputs, canvas);
+      return textResult("已准备生图参考图。", { ...canvas, projectDir, references });
+    }
+
     if (params.name === "project_references") {
       const projectDir = requireProjectDir(args);
       const root = path.resolve(projectDir);
@@ -500,6 +539,8 @@ async function handle(method, params) {
       const job = await createImageJob(projectDir, {
         objectId: args.objectId,
         action: args.action,
+        referenceObjectIds: args.referenceObjectIds,
+        useFirstAsBase: args.useFirstAsBase,
         prompt: args.prompt || ""
       }, { canvasId: canvas.canvasId });
       return textResult(`已为画屿对象 ${args.objectId} 启动 ${args.action}。`, job);
@@ -590,6 +631,19 @@ function textResult(text, data) {
     content: [{ type: "text", text }],
     structuredContent: data
   };
+}
+
+function requireReferenceInputs(images) {
+  if (!Array.isArray(images) || images.length < 1 || images.length > maxReferenceImages || images.some(item => {
+    if (!item || typeof item !== "object") return true;
+    const fields = [typeof item.objectId === "string" && Boolean(item.objectId.trim()),
+      typeof item.path === "string" && path.isAbsolute(item.path),
+      Number.isInteger(item.attachmentIndex) && item.attachmentIndex >= 1];
+    return fields.filter(Boolean).length !== 1 || Object.keys(item).length !== 1;
+  })) {
+    throw Object.assign(new Error("Select 1–5 reference images by objectId, absolute path, or attachmentIndex."), { statusCode: 400 });
+  }
+  return images;
 }
 
 function requireSingleImageInput(args = {}) {

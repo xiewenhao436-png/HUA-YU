@@ -71,6 +71,31 @@ try {
     await frame.waitForFunction(() => !document.querySelector('[data-history-action="undo"]').disabled);
     await frame.locator("#board").press("Control+z"); // undo movement
     await frame.waitForFunction(style => document.querySelector(".canvas-import-frame:last-of-type")?.getAttribute("style") === style || [...document.querySelectorAll(".canvas-import-frame")].at(-1)?.getAttribute("style") === style, groupBefore);
+    // Grabbing a picture inside the frame moves the full frame by a single offset.
+    const groupId = await group.getAttribute("data-import-group");
+    const groupGeometry = () => frame.evaluate(async groupId => {
+      const state = await (await window.codexCanvasApp.fetch("/api/state")).json();
+      return state.objects.filter(object => (object.autoImageGroup?.panelId || object.importGroupId) === groupId)
+        .map(({ id, x, y }) => ({ id, x, y }));
+    }, groupId);
+    const before = await groupGeometry();
+    assert.ok(before.length >= 2);
+    const member = await frame.locator(`[data-id="${before[0].id}"] .image-content`).boundingBox();
+    await page.mouse.move(member.x + member.width / 2, member.y + member.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(member.x + member.width / 2 + 32, member.y + member.height / 2 + 24, { steps: 3 });
+    await page.mouse.up();
+    await frame.waitForFunction(style => [...document.querySelectorAll(".canvas-import-frame")].at(-1)?.getAttribute("style") !== style, groupBefore);
+    await frame.waitForFunction(async ({ id, x }) => {
+      const state = await (await window.codexCanvasApp.fetch("/api/state")).json();
+      return state.objects.find(object => object.id === id)?.x !== x;
+    }, before[0]);
+    const moved = await groupGeometry();
+    const offsets = moved.map((object, index) => [object.x - before[index].x, object.y - before[index].y]);
+    assert.ok(offsets[0].every(offset => offset > 0));
+    assert.ok(offsets.every(offset => offset.every((amount, axis) => amount === offsets[0][axis])));
+    await frame.locator("#board").press("Control+z");
+    await frame.waitForFunction(style => [...document.querySelectorAll(".canvas-import-frame")].at(-1)?.getAttribute("style") === style, groupBefore);
     await frame.waitForFunction(() => !document.querySelector('[data-history-action="undo"]').disabled);
     await frame.locator("#board").press("Control+z"); // undo import
     await frame.waitForFunction(count => document.querySelectorAll("#objects .canvas-object").length === count, countBefore);

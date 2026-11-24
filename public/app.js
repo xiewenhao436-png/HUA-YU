@@ -3,7 +3,7 @@ import { sidebar, canvasOrigin, canvasFetch as fetch, preferences } from "./canv
 import { installCanvasMedia } from "./canvas-media.js";
 import { groupedCanvasSwitcher, installCanvasLibrary } from "./canvas-library.js";
 import { canvasName } from "./canvas-center.js";
-import { createImportFrames } from "./canvas-import-frames.js";
+import { createImportFrames, importFrameId } from "./canvas-import-frames.js";
 import { installCanvasMinimap } from "./canvas-minimap.js";
 let importFrames = null;
 
@@ -22,6 +22,11 @@ const appUpdateButton = document.querySelector("#appUpdateButton");
 const appUpdateStatus = document.querySelector("#appUpdateStatus");
 const toolbar = document.querySelector("#selectionToolbar");
 const quickEditComposer = document.querySelector("#quickEditComposer");
+const lineageEdges = document.querySelector("#lineageEdges");
+const lineageStrip = document.querySelector("#lineageStrip");
+const referenceComposerPanel = document.querySelector("#referenceComposerPanel");
+const referenceComposerImages = document.querySelector("#referenceComposerImages");
+const referenceUseFirstAsBase = document.querySelector("#referenceUseFirstAsBase");
 const quickEditPrompt = document.querySelector("#quickEditPrompt");
 const editTextPanel = document.querySelector("#editTextPanel");
 const editTextList = document.querySelector("#editTextList");
@@ -183,8 +188,21 @@ const translations = {
     uploadDone: "Image uploaded.",
     uploadFailed: "Image upload failed.",
     downloadFailed: "Download failed.",
+    referencePrompt: "Describe the image to generate",
+    referencePromptRequired: "Describe the image you want to generate.",
+    referenceUnavailable: "A reference image is unavailable. Select your references again.",
+    referenceImages: "Reference images",
+    referenceUseFirstAsBase: "Use the first image as the base",
+    lineageInputs: "Input images",
+    lineageSource: "Base image",
+    lineageReference: "Reference",
+    lineageMissing: "Image unavailable",
+    lineageReturn: "Back to generated image",
     actions: {
       "quick-edit": "Quick Edit",
+      "bind-text": "Bind text",
+      "unbind-text": "Unbind text",
+      "reference-generate": "Generate from references",
       "remove-bg": "Remove BG",
       "expand": "Expand",
       "crop": "Crop",
@@ -200,6 +218,7 @@ const translations = {
     },
     actionNames: {
       "quick-edit": "Quick Edit",
+      "reference-generate": "Generate from references",
       "remove-bg": "Remove BG",
       "expand": "Expand",
       "crop": "Crop",
@@ -338,8 +357,21 @@ const translations = {
     uploadDone: "图片已上传。",
     uploadFailed: "图片上传失败。",
     downloadFailed: "下载失败。",
+    referencePrompt: "描述你想生成的画面",
+    referencePromptRequired: "请描述你想生成的画面。",
+    referenceUnavailable: "有参考图不可用，请重新选择。",
+    referenceImages: "参考图片",
+    referenceUseFirstAsBase: "首张作为底图",
+    lineageInputs: "生成来源",
+    lineageSource: "底图",
+    lineageReference: "参考",
+    lineageMissing: "图片不可用",
+    lineageReturn: "回到成图",
     actions: {
       "quick-edit": "快捷编辑",
+      "bind-text": "绑定文字",
+      "unbind-text": "解除文字绑定",
+      "reference-generate": "参考生图",
       "remove-bg": "去背景",
       "expand": "扩图",
       "crop": "裁剪",
@@ -355,6 +387,7 @@ const translations = {
     },
     actionNames: {
       "quick-edit": "快捷编辑",
+      "reference-generate": "参考生图",
       "remove-bg": "去背景",
       "expand": "扩图",
       "crop": "裁剪",
@@ -395,6 +428,12 @@ let state = null;
 let knownObjectIds = null;
 let suppressNextAutoFocus = false;
 let selectedId = null;
+const maxReferenceImages = 5;
+let referenceComposerIds = [];
+let lineageStripKey = "";
+let lineageFocusId = null;
+let lineageReturnId = null;
+let lineageFocusTimer;
 let selectedIds = new Set();
 let hasUserSelection = false;
 let activeTool = defaultCanvasTool;
@@ -436,9 +475,10 @@ let versionDiffOverlay = null;
 let versionDiffHeatmapToken = 0;
 let appUpdateInfo = null;
 let appUpdateBusy = false;
-const composerImageActions = new Set(["quick-edit", "expand", "edit-text"]);
+const composerImageActions = new Set(["quick-edit", "expand", "edit-text", "reference-generate"]);
 const immediateImageJobActions = new Set(["remove-bg", "edit-elements"]);
 const quickEditMarkupTools = new Set(["annotation", "pencil", "text"]);
+const textBindingActions = new Set(["bind-text", "unbind-text"]);
 const groupSelectionActions = new Set(["reset-layer-group", "layer-up", "layer-down", "group-layer-group"]);
 const maxUndoStackSize = 50;
 const canvasHistory = new CanvasHistory({
@@ -507,9 +547,8 @@ const canvasLibrary = installCanvasLibrary({
 importFrames = createImportFrames({ layer: objectLayer, objects: () => state?.objects || [], drag: (event, groupId, ids) => {
   if (activeTool !== "select") return;
   event.preventDefault(); event.stopPropagation();
-  setLocalSelection(ids, { fromUser: true }); render();
-  const label = [...objectLayer.querySelectorAll(".canvas-import-frame")].find(f => f.dataset.importGroup === groupId)?.querySelector("button");
-  startDrag(event, state.objects.find(o => o.id === ids[0]), { element: label });
+  const object = state.objects.find((item) => item.id === ids[0]);
+  if (object) startDrag(event, object, { frameId: groupId });
 } });
 const importButton = document.createElement("button"); importButton.type = "button"; importButton.id = "canvasImportButton";
 importButton.className = "canvas-import-button"; importButton.textContent = "从其他会话导入";
@@ -710,6 +749,10 @@ document.addEventListener("click", (event) => {
   if (action) {
     event.stopPropagation();
     updateSelectionUi();
+    if (textBindingActions.has(action)) {
+      changeTextBinding(action);
+      return;
+    }
     if (composerImageActions.has(action)) {
       openImageActionComposer(action);
       return;
@@ -868,7 +911,7 @@ document.addEventListener("pointerdown", (event) => {
   }
   if (isSettingsEvent || isPromptHistoryEvent || isLayerBrowserEvent || isCanvasSearchEvent) return;
   if (!quickEditObjectId && !selectedId && selectedIds.size === 0) return;
-  if (event.target.closest(".canvas-object, .selection-toolbar, .quick-edit-composer, .color-palette, .tool-dock, .prompt-history-panel, .prompt-history-button, .layer-browser-panel, .layer-browser-button, .canvas-search")) return;
+  if (event.target.closest(".canvas-object, .lineage-strip, .selection-toolbar, .quick-edit-composer, .color-palette, .tool-dock, .prompt-history-panel, .prompt-history-button, .layer-browser-panel, .layer-browser-button, .canvas-search")) return;
   closeQuickEdit({ keepPrompt: true });
   selectObject(null);
 });
@@ -878,9 +921,19 @@ quickEditComposer.addEventListener("submit", (event) => {
   submitQuickEdit();
 });
 
-quickEditPrompt.addEventListener("input", updateQuickEditRunState);
+// A sandboxed MCP App can block form submission before dispatching submit.
+quickEditRun.addEventListener("click", (event) => {
+  event.preventDefault();
+  submitQuickEdit();
+});
 
-quickEditCancel.addEventListener("click", () => closeQuickEdit());
+quickEditPrompt.addEventListener("input", updateQuickEditRunState);
+referenceUseFirstAsBase.addEventListener("change", renderReferenceComposerImages);
+
+quickEditCancel.addEventListener("click", () => {
+  closeQuickEdit();
+  updateSelectionUi();
+});
 
 expandScale?.addEventListener("change", () => {
   expandConfig.scale = expandScale.value || "1";
@@ -912,9 +965,38 @@ quickEditPrompt.addEventListener("keydown", (event) => {
   }
 });
 
+lineageStrip.addEventListener("wheel", (event) => {
+  if (event.ctrlKey || lineageStrip.scrollWidth <= lineageStrip.clientWidth) return;
+  event.preventDefault();
+  const delta = normalizedWheelDelta(event);
+  lineageStrip.scrollLeft += delta.x || delta.y;
+}, { passive: false });
+lineageStrip.addEventListener("click", (event) => {
+  if (event.target.closest("[data-lineage-return]")) {
+    const result = state?.objects.find((item) => item.id === selectedId);
+    if (result) {
+      lineageFocusId = null;
+      lineageReturnId = null;
+      frameCanvasObject(result);
+    }
+    return;
+  }
+  const id = event.target.closest("[data-lineage-id]")?.dataset.lineageId;
+  const object = state?.objects.find((item) => item.id === id);
+  if (!object) return;
+  lineageFocusId = id;
+  lineageReturnId = selectedId;
+  window.clearTimeout(lineageFocusTimer);
+  frameCanvasObject(object);
+  lineageFocusTimer = window.setTimeout(() => {
+    lineageFocusId = null;
+    updateSelectionUi();
+  }, 2000);
+});
+
 board.addEventListener("wheel", (event) => {
   if (!state) return;
-  if (shouldUseNativeWheel(event.target)) return;
+  if (event.defaultPrevented || shouldUseNativeWheel(event.target)) return;
   event.preventDefault();
   const delta = normalizedWheelDelta(event);
   if (event.ctrlKey) {
@@ -2171,6 +2253,21 @@ function render() {
         createTextObject(event);
         return;
       }
+      if (event.shiftKey && activeTool === "select" && ["image", "text"].includes(objectType)) {
+        event.preventDefault();
+        event.stopPropagation();
+        const ids = new Set(selectedObjectIds());
+        if (ids.has(object.id)) ids.delete(object.id);
+        else ids.add(object.id);
+        setLocalSelection([...ids], { fromUser: true });
+        render();
+        fetch(apiPath("/api/selection"), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ selection: selectedId })
+        }).catch(() => {});
+        return;
+      }
       const textTarget = event.target.closest(".text-content");
       if (object.type === "text" && editingTextId === object.id && textTarget) {
         event.stopPropagation();
@@ -2851,11 +2948,20 @@ function startDrag(event, object, options = {}) {
   const isExpandPreviewDrag = quickEditAction === "expand"
     && quickEditObjectId === object.id
     && !quickEditComposer.hidden
-    && !options.forceGroup;
-  const isMultiSelectionDrag = !options.forceGroup && selectedIds.size > 1 && selectedIds.has(object.id);
-  const useLayerGroup = object.layerGroupId && (options.forceGroup || object.layerGroupLocked);
-  const groupMembers = useLayerGroup ? layerGroupMembers(object.layerGroupId) : [];
-  const multiMembers = isMultiSelectionDrag ? selectedObjects() : [];
+    && !options.forceGroup && !options.frameId;
+  const isMultiSelectionDrag = !options.forceGroup && !options.frameId && selectedIds.size > 1 && selectedIds.has(object.id);
+  const useLayerGroup = !options.frameId && object.layerGroupId && (options.forceGroup || object.layerGroupLocked);
+  const frameId = options.frameId || ((object.type || "image") === "image" && importFrameId(object));
+  let movingObjects = [object];
+  if (!isExpandPreviewDrag) {
+    if (isMultiSelectionDrag) movingObjects = selectedObjects();
+    else if (useLayerGroup) movingObjects = layerGroupMembers(object.layerGroupId);
+    else if (frameId) movingObjects = state.objects.filter((item) => importFrameId(item) === frameId);
+    const imageIds = new Set(movingObjects.filter((item) => (item.type || "image") === "image").map((item) => item.id));
+    const movingIds = new Set(movingObjects.map((item) => item.id));
+    movingObjects = movingObjects.concat(state.objects.filter((item) =>
+      item.type === "text" && imageIds.has(item.anchorImageId) && !movingIds.has(item.id)));
+  }
   if (element.setPointerCapture) {
     try {
       element.setPointerCapture(event.pointerId);
@@ -2863,7 +2969,11 @@ function startDrag(event, object, options = {}) {
       // Continue with window-level pointer listeners if capture is unavailable.
     }
   }
-  if (!isMultiSelectionDrag) {
+  if (options.frameId) {
+    const frameIds = movingObjects.filter((item) => importFrameId(item) === frameId).map((item) => item.id);
+    setLocalSelection(frameIds, { fromUser: true });
+    updateSelectionClasses();
+  } else if (!isMultiSelectionDrag) {
     setLocalSelection([object.id], { fromUser: true });
   }
   element.classList.add("selected", "dragging");
@@ -2873,9 +2983,7 @@ function startDrag(event, object, options = {}) {
     expandPreview: isExpandPreviewDrag ? {
       frame: expandPreviewRect(object)
     } : null,
-    multiIds: isMultiSelectionDrag ? multiMembers.map((item) => item.id) : [],
-    multiMembers: multiMembers.map((item) => ({ id: item.id, x: item.x, y: item.y })),
-    members: groupMembers.map((item) => ({ id: item.id, x: item.x, y: item.y })),
+    members: movingObjects.map((item) => ({ id: item.id, patch: { x: item.x, y: item.y } })),
     element,
     pointerId: event.pointerId,
     startX: event.clientX,
@@ -2910,37 +3018,18 @@ function moveDrag(event) {
     object.y = clamp(Math.round(drag.objectY + dy), frame.y, frame.y + frame.height - object.height);
     drag.element.style.left = `${object.x}px`;
     drag.element.style.top = `${object.y}px`;
-  } else if (drag.multiMembers?.length) {
-    for (const memberStart of drag.multiMembers) {
-      const member = state.objects.find((item) => item.id === memberStart.id);
-      if (!member) continue;
-      member.x = memberStart.x + dx;
-      member.y = memberStart.y + dy;
-      const memberElement = objectLayer.querySelector(`[data-id="${member.id}"]`);
-      if (memberElement) {
-        memberElement.style.left = `${member.x}px`;
-        memberElement.style.top = `${member.y}px`;
-      }
-    }
-  } else if (drag.groupId) {
-    for (const memberStart of drag.members) {
-      const member = state.objects.find((item) => item.id === memberStart.id);
-      if (!member) continue;
-      member.x = memberStart.x + dx;
-      member.y = memberStart.y + dy;
-      const memberElement = objectLayer.querySelector(`[data-id="${member.id}"]`);
-      if (memberElement) {
-        memberElement.style.left = `${member.x}px`;
-        memberElement.style.top = `${member.y}px`;
-      }
-    }
   } else {
-    const object = state.objects.find((item) => item.id === drag.id);
-    if (!object) return;
-    object.x = Math.round(drag.objectX + dx);
-    object.y = Math.round(drag.objectY + dy);
-    drag.element.style.left = `${object.x}px`;
-    drag.element.style.top = `${object.y}px`;
+    for (const { id, patch } of drag.members) {
+      const member = state.objects.find((item) => item.id === id);
+      if (!member) continue;
+      member.x = Math.round(patch.x + dx);
+      member.y = Math.round(patch.y + dy);
+      const memberElement = objectLayer.querySelector(`[data-id="${CSS.escape(id)}"]`);
+      if (memberElement) {
+        memberElement.style.left = `${member.x}px`;
+        memberElement.style.top = `${member.y}px`;
+      }
+    }
   }
   updateLayerGroupSelectionElement(drag.groupId || selectedLayerGroupId());
   updateVersionDiffOverlayElement();
@@ -2986,11 +3075,7 @@ function endDrag(event) {
       // Pointer capture may already be gone after cancellation.
     }
   }
-  const before = activeDrag.multiMembers?.length
-    ? activeDrag.multiMembers.map((item) => ({ id: item.id, patch: { x: item.x, y: item.y } }))
-    : activeDrag.groupId
-      ? activeDrag.members.map((item) => ({ id: item.id, patch: { x: item.x, y: item.y } }))
-      : [{ id: activeDrag.id, patch: { x: activeDrag.objectX, y: activeDrag.objectY } }];
+  const before = activeDrag.members;
   const after = before.map((update) => {
     const member = state.objects.find((item) => item.id === update.id);
     return {
@@ -3012,7 +3097,7 @@ function endDrag(event) {
     updateSelectionUi();
     return;
   }
-  if (object || activeDrag.multiMembers?.length || activeDrag.groupId) {
+  if (object || before.length > 1) {
     commitObjectUpdateHistory({
       before,
       after,
@@ -3393,6 +3478,11 @@ async function selectObject(id, { fromUser = false, renderNow = true } = {}) {
 
 function setLocalSelection(ids, { fromUser = true } = {}) {
   const nextIds = ids.filter(Boolean);
+  if (lineageReturnId && (nextIds.length !== 1 || nextIds[0] !== lineageReturnId)) {
+    lineageReturnId = null;
+    lineageFocusId = null;
+    window.clearTimeout(lineageFocusTimer);
+  }
   if (cropSession && (nextIds.length !== 1 || nextIds[0] !== cropSession.objectId)) {
     cropSession = null;
     cropDrag = null;
@@ -3539,7 +3629,145 @@ function rectsIntersect(a, object) {
     && a.y + a.height >= object.y;
 }
 
+function selectedReferenceImages() {
+  const ids = selectedObjectIds();
+  if (!ids.size || ids.size > maxReferenceImages || selectedLayerGroupId()) return [];
+  const objects = [...ids].map((id) => state?.objects.find((object) => object.id === id));
+  return objects.every((object) => object && (object.type || "image") === "image") ? objects : [];
+}
+
+function makeReferenceThumbnail(object, label, navigate = false) {
+  const card = document.createElement(navigate ? "button" : "div");
+  card.className = "reference-thumbnail";
+  card.title = object?.name ? `${label} · ${object.name}` : label;
+  card.setAttribute("aria-label", card.title);
+  if (navigate) card.type = "button";
+  if (object?.src) {
+    const thumbnail = document.createElement("img");
+    thumbnail.src = assetUrl(object.src, object);
+    thumbnail.alt = "";
+    thumbnail.draggable = false;
+    card.append(thumbnail);
+  } else {
+    card.classList.add("missing");
+  }
+  const caption = document.createElement("span");
+  caption.textContent = label;
+  card.append(caption);
+  return card;
+}
+
+function renderReferenceComposerImages() {
+  referenceComposerImages.setAttribute("aria-label", t("referenceImages"));
+  const useFirstAsBase = referenceUseFirstAsBase.checked;
+  referenceComposerImages.replaceChildren(...referenceComposerIds.map((id, index) => {
+    const object = state?.objects.find((item) => item.id === id);
+    const label = useFirstAsBase && index === 0
+      ? t("lineageSource")
+      : `${t("lineageReference")} ${index + (useFirstAsBase ? 0 : 1)}`;
+    return makeReferenceThumbnail(object, object ? label : `${label} · ${t("lineageMissing")}`);
+  }));
+}
+
+function imageLineage(result) {
+  const referenceIds = Array.isArray(result.referenceObjectIds) ? result.referenceObjectIds : [];
+  const ids = new Set([result.sourceObjectId, ...referenceIds]);
+  ids.delete(result.id);
+  return [...ids].filter(Boolean).map((id) => ({
+    id,
+    source: id === result.sourceObjectId,
+    referenceIndex: referenceIds.indexOf(id) + 1,
+    object: state.objects.find((item) => item.id === id && (item.type || "image") === "image")
+  }));
+}
+
+function updateLineage() {
+  const result = hasUserSelection && !quickEditObjectId && !cropSession
+    ? state?.objects.find((item) => item.id === selectedId && (item.type || "image") === "image")
+    : null;
+  const inputs = result ? imageLineage(result) : [];
+  if (lineageReturnId !== result?.id) lineageReturnId = null;
+  lineageStrip.hidden = !inputs.length;
+  const focused = inputs.some((input) => input.object?.id === lineageFocusId)
+    ? objectLayer.querySelector(`[data-id="${CSS.escape(lineageFocusId)}"]`)
+    : null;
+  const previous = objectLayer.querySelector(".lineage-target");
+  if (previous !== focused) previous?.classList.remove("lineage-target");
+  focused?.classList.add("lineage-target");
+  if (!inputs.length) {
+    if (lineageStripKey) {
+      lineageEdges.replaceChildren();
+      lineageStrip.replaceChildren();
+      lineageStripKey = "";
+    }
+    lineageFocusId = null;
+    return;
+  }
+
+  const key = JSON.stringify([language, result.id, lineageReturnId, inputs.map(({ id, source, referenceIndex, object }) => [
+    id, source, referenceIndex, object?.src, object?.name
+  ])]);
+  if (key !== lineageStripKey) {
+    lineageStripKey = key;
+    lineageStrip.setAttribute("aria-label", t("lineageInputs"));
+    lineageStrip.replaceChildren(...inputs.map(({ id, source, referenceIndex, object }) => {
+      const labels = [];
+      if (source) labels.push(t("lineageSource"));
+      if (referenceIndex) labels.push(`${t("lineageReference")} ${referenceIndex}`);
+      if (!object) labels.push(t("lineageMissing"));
+      const card = makeReferenceThumbnail(object, labels.join(" · "), Boolean(object));
+      if (object) card.dataset.lineageId = id;
+      return card;
+    }));
+    if (lineageReturnId) {
+      const back = document.createElement("button");
+      back.type = "button";
+      back.className = "lineage-return";
+      back.dataset.lineageReturn = "";
+      back.title = t("lineageReturn");
+      back.setAttribute("aria-label", back.title);
+      back.append(createSvgIcon("context-icon", ["M9 10 4 15l5 5", "M20 5v6a4 4 0 0 1-4 4H4"]));
+      lineageStrip.prepend(back);
+    }
+    lineageStrip.scrollLeft = 0;
+  }
+
+  const center = worldToScreen(result.x + result.width / 2, result.y + result.height / 2);
+  const bottom = worldToScreen(result.x, result.y + result.height).y;
+  const width = lineageStrip.offsetWidth;
+  const left = clamp(center.x - width / 2, 12, Math.max(12, board.clientWidth - width - 12));
+  const top = clamp(bottom + 12, 76, Math.max(76, board.clientHeight - lineageStrip.offsetHeight - 60));
+  lineageStrip.style.transform = `translate(${left}px, ${top}px)`;
+  lineageEdges.replaceChildren(...inputs.filter(({ object }) => object).map((input) => renderLineageEdge(input, result)));
+}
+
+function lineageEdgeEndpoint(object, toward) {
+  const centerX = object.x + object.width / 2;
+  const centerY = object.y + object.height / 2;
+  const dx = toward.x + toward.width / 2 - centerX;
+  const dy = toward.y + toward.height / 2 - centerY;
+  const scale = Math.max(2 * Math.abs(dx) / object.width, 2 * Math.abs(dy) / object.height) || 1;
+  return worldToScreen(centerX + dx / scale, centerY + dy / scale);
+}
+
+function renderLineageEdge(input, result) {
+  const start = lineageEdgeEndpoint(input.object, result);
+  const end = lineageEdgeEndpoint(result, input.object);
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  const horizontal = Math.abs(end.x - start.x) > Math.abs(end.y - start.y);
+  const middleX = (start.x + end.x) / 2;
+  const middleY = (start.y + end.y) / 2;
+  const bend = horizontal
+    ? `${middleX} ${start.y}, ${middleX} ${end.y}`
+    : `${start.x} ${middleY}, ${end.x} ${middleY}`;
+  path.setAttribute("d", `M ${start.x} ${start.y} C ${bend}, ${end.x} ${end.y}`);
+  path.classList.add(input.source ? "source" : "reference");
+  if (input.id === lineageFocusId) path.classList.add("active");
+  return path;
+}
+
 function updateSelectionUi() {
+  updateLineage();
   if (!state) { hideSelectionToolbar(); return; }
   const object = state.objects.find((item) => item.id === selectedId);
   const groupId = selectedLayerGroupId();
@@ -3563,7 +3791,21 @@ function updateSelectionUi() {
     return;
   }
 
-  if (selectedIds.size > 1 || !object || object.type !== "image" || !hasUserSelection) {
+  const binding = selectedTextBinding();
+  const references = selectedReferenceImages();
+  if (binding || references.length > 1) {
+    closeQuickEdit({ keepPrompt: true });
+    toolbar.classList.remove("has-layer-group-actions");
+    toolbar.querySelector("[data-toolbar-group-break]").hidden = true;
+    toolbar.querySelectorAll("[data-action]").forEach((button) => {
+      button.hidden = button.dataset.action !== (binding?.action || "reference-generate");
+    });
+    toolbar.hidden = false;
+    positionSelectionToolbar(boundsForObjects(binding ? binding.objects : references));
+    return;
+  }
+
+  if (!object || (object.type || "image") !== "image" || !hasUserSelection) {
     hideSelectionToolbar();
     closeQuickEdit({ keepPrompt: true });
     return;
@@ -3573,6 +3815,37 @@ function updateSelectionUi() {
   if (isGroupSelection) closeQuickEdit({ keepPrompt: true });
   toolbar.hidden = Boolean(quickEditObjectId);
   const bounds = isGroupSelection ? layerGroupBounds(groupId) : boundsForObjects([object]);
+  positionSelectionToolbar(bounds);
+  updateQuickEditPosition();
+}
+
+function selectedTextBinding() {
+  const objects = selectedObjects();
+  const note = objects.find((item) => item.type === "text");
+  if (!note) return null;
+  if (objects.length === 1 && note.anchorImageId) return { action: "unbind-text", note, objects };
+  if (objects.length !== 2) return null;
+  const image = objects.find((item) => (item.type || "image") === "image");
+  if (!image) return null;
+  const action = note.anchorImageId === image.id ? "unbind-text" : "bind-text";
+  return { action, note, image, objects };
+}
+
+function changeTextBinding(action) {
+  const binding = selectedTextBinding();
+  if (!binding || binding.action !== action) return;
+  const { note, image } = binding;
+  const selection = captureSelectionSnapshot();
+  return commitObjectUpdateHistory({
+    before: [{ id: note.id, patch: { anchorImageId: note.anchorImageId || null } }],
+    after: [{ id: note.id, patch: { anchorImageId: action === "bind-text" ? image.id : null } }],
+    selectionBefore: selection,
+    selectionAfter: selection,
+    scopeMeta: currentCanvasScopeMeta()
+  });
+}
+
+function positionSelectionToolbar(bounds) {
   const topLeft = worldToScreen(bounds.x, bounds.y);
   const bottomRight = worldToScreen(bounds.x + bounds.width, bounds.y + bounds.height);
   const toolbarRect = toolbar.getBoundingClientRect();
@@ -3580,12 +3853,11 @@ function updateSelectionUi() {
   const objectCenter = (topLeft.x + bottomRight.x) / 2;
   const topSafeArea = 76;
   const aboveTop = topLeft.y - toolbarRect.height - 26;
-  const belowTop = bottomRight.y + 16;
+  const belowTop = bottomRight.y + 16 + (lineageStrip.hidden ? 0 : lineageStrip.offsetHeight + 12);
   const preferredTop = aboveTop >= topSafeArea ? aboveTop : belowTop;
   const top = clamp(preferredTop, topSafeArea, Math.max(topSafeArea, boardRect.height - toolbarRect.height - 16));
   const left = clamp(objectCenter - toolbarRect.width / 2, 16, Math.max(16, boardRect.width - toolbarRect.width - 16));
   toolbar.style.transform = `translate(${left}px, ${top}px)`;
-  updateQuickEditPosition();
 }
 
 function hideSelectionToolbar() {
@@ -3594,7 +3866,7 @@ function hideSelectionToolbar() {
   const groupBreak = toolbar.querySelector("[data-toolbar-group-break]");
   if (groupBreak) groupBreak.hidden = true;
   toolbar.querySelectorAll("[data-action]").forEach((button) => {
-    if (groupSelectionActions.has(button.dataset.action)) button.hidden = true;
+    button.hidden = groupSelectionActions.has(button.dataset.action);
     button.disabled = false;
   });
 }
@@ -4500,7 +4772,7 @@ function displaySizeForUpload(size) {
 }
 
 async function startImageJob(action, options = {}) {
-  const object = state.objects.find((item) => item.id === selectedId);
+  const object = state.objects.find((item) => item.id === (options.objectId ?? selectedId));
   if (!object || (object.type || "image") !== "image") return;
 
   showToast(`${labelAction(action)} ${t("jobStarted")}`);
@@ -4512,6 +4784,8 @@ async function startImageJob(action, options = {}) {
         action,
         objectId: object.id,
         prompt: options.prompt || "",
+        ...(action === "reference-generate" ? { referenceObjectIds: options.referenceObjectIds } : {}),
+        ...(action === "reference-generate" && options.useFirstAsBase ? { useFirstAsBase: true } : {}),
         ...(action === "quick-edit" && options.annotationSessionId
           ? { annotationSessionId: options.annotationSessionId }
           : {}),
@@ -4591,8 +4865,13 @@ async function copyTextToClipboard(text) {
 }
 
 function openImageActionComposer(action) {
-  const object = state.objects.find((item) => item.id === selectedId);
+  const isReference = action === "reference-generate";
+  const references = isReference ? selectedReferenceImages() : [];
+  const object = isReference ? references[0] : state.objects.find((item) => item.id === selectedId);
   if (!object || (object.type || "image") !== "image" || !hasUserSelection) return;
+  referenceComposerIds = references.map((reference) => reference.id);
+  referenceUseFirstAsBase.checked = false;
+  if (isReference) quickEditPrompt.value = "";
   quickEditAction = action;
   quickEditObjectId = object.id;
   quickEditAnnotationSessionId = null;
@@ -4645,7 +4924,11 @@ function closeQuickEdit({ keepPrompt = false, cancelTextSession = true, restoreE
   editTextList.replaceChildren();
   editTextStatus.textContent = "";
   quickEditRun.disabled = false;
-  quickEditComposer.classList.remove("edit-text-mode", "quick-edit-mode", "expand-mode");
+  quickEditComposer.classList.remove("edit-text-mode", "quick-edit-mode", "expand-mode", "reference-mode");
+  referenceComposerIds = [];
+  referenceUseFirstAsBase.checked = false;
+  referenceComposerPanel.hidden = true;
+  referenceComposerImages.replaceChildren();
   expandConfig.frame = null;
   expandConfig.sourceStart = null;
   expandConfig.placement = null;
@@ -4691,11 +4974,21 @@ async function submitQuickEdit() {
     else quickEditPrompt.focus();
     return;
   }
+  const referenceObjectIds = [...referenceComposerIds];
+  const useFirstAsBase = action === "reference-generate" && referenceUseFirstAsBase.checked;
+  if (action === "reference-generate"
+    && !referenceObjectIds.every((id) => state.objects.some((object) => object.id === id && (object.type || "image") === "image"))) {
+    showToast(t("referenceUnavailable"));
+    return;
+  }
   const annotationSessionId = action === "quick-edit" ? ensureQuickEditAnnotationSessionId() : null;
   const expandOptions = action === "expand" ? currentExpandOptions() : null;
-  setLocalSelection([objectId], { fromUser: true });
+  if (action !== "reference-generate") setLocalSelection([objectId], { fromUser: true });
   closeQuickEdit();
   await startImageJob(action, {
+    objectId,
+    referenceObjectIds,
+    useFirstAsBase,
     prompt,
     annotationSessionId,
     expand: expandOptions
@@ -4756,13 +5049,17 @@ function configureComposerMode(action, object = null) {
   const isExpand = action === "expand";
   quickEditComposer.classList.toggle("edit-text-mode", isEditText);
   quickEditComposer.classList.toggle("expand-mode", isExpand);
-  quickEditComposer.classList.toggle("quick-edit-mode", !isEditText && !isExpand);
+  const isReference = action === "reference-generate";
+  quickEditComposer.classList.toggle("quick-edit-mode", action === "quick-edit");
+  quickEditComposer.classList.toggle("reference-mode", isReference);
+  referenceComposerPanel.hidden = !isReference;
+  if (isReference) renderReferenceComposerImages();
   editTextPanel.hidden = !isEditText;
   expandPanel.hidden = !isExpand;
   quickEditPrompt.hidden = isEditText || isExpand;
-  if (quickEditHint) quickEditHint.hidden = isEditText || isExpand;
+  if (quickEditHint) quickEditHint.hidden = action !== "quick-edit";
   editTextPanel.querySelector(".edit-text-title").textContent = t("editTextTitle");
-  quickEditRun.textContent = !isEditText && !isExpand ? t("applyAnnotations") : t("run");
+  quickEditRun.textContent = action === "quick-edit" ? t("applyAnnotations") : t("run");
   if (isExpand) {
     quickEditPrompt.value = "";
     activeTextRecognitionId = null;
@@ -4791,6 +5088,10 @@ function configureComposerMode(action, object = null) {
 }
 
 function updateQuickEditRunState() {
+  if (quickEditAction === "reference-generate") {
+    quickEditRun.disabled = !quickEditPrompt.value.trim();
+    return;
+  }
   if (quickEditAction !== "quick-edit" || !quickEditObjectId || quickEditComposer.hidden) return;
   const hasPrompt = Boolean(quickEditPrompt.value.trim());
   const hasAnnotations = quickEditAnnotationsForTarget(quickEditObjectId).length > 0;
@@ -5000,12 +5301,14 @@ function updateExpandPreview() {
 }
 
 function composerPlaceholder(action) {
+  if (action === "reference-generate") return t("referencePrompt");
   if (action === "edit-text") return t("editTextPlaceholder");
   if (action === "expand") return t("expandPlaceholder");
   return t("quickEditPlaceholder");
 }
 
 function composerEmptyMessage(action) {
+  if (action === "reference-generate") return t("referencePromptRequired");
   if (action === "edit-text") return t("editTextEmpty");
   if (action === "expand") return t("expandEmpty");
   return t("quickEditEmpty");
@@ -5460,6 +5763,7 @@ function applyLanguage() {
     element.placeholder = t(element.dataset.i18nPlaceholder);
   });
   if (quickEditAction) {
+    if (quickEditAction === "reference-generate") renderReferenceComposerImages();
     quickEditPrompt.placeholder = composerPlaceholder(quickEditAction);
     if (quickEditHint) quickEditHint.textContent = t("quickEditHint");
     quickEditRun.textContent = quickEditAction === "quick-edit" ? t("applyAnnotations") : t("run");
@@ -5606,7 +5910,7 @@ function pointerToWorld(event) {
 
 function shouldUseNativeWheel(target) {
   if (!(target instanceof Element)) return false;
-  return Boolean(target.closest("input, textarea, select, [contenteditable='true'], .quick-edit-composer, .canvas-search, .prompt-history-panel, .layer-browser-panel"));
+  return Boolean(target.closest("input, textarea, select, [contenteditable='true'], .quick-edit-composer, .lineage-strip, .canvas-search, .prompt-history-panel, .layer-browser-panel"));
 }
 
 function normalizedWheelDelta(event) {
@@ -5998,8 +6302,8 @@ function updateToolbarForSelection(isGroupSelection) {
   if (groupBreak) groupBreak.hidden = !selectedGroupMemberId;
   toolbar.querySelectorAll("[data-action]").forEach((button) => {
     const action = button.dataset.action;
-    if (groupSelectionActions.has(action)) button.hidden = !selectedGroupMemberId;
-    if (singleSelectionActions.has(action)) button.hidden = isGroupSelection;
+    button.hidden = textBindingActions.has(action) || (groupSelectionActions.has(action) && !selectedGroupMemberId)
+      || (singleSelectionActions.has(action) && isGroupSelection);
   });
   updateGroupActionButton(isGroupSelection);
   updateLayerOrderButtons();

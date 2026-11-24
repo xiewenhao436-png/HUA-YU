@@ -91,6 +91,12 @@ export async function importBoardImages({ sourceBoardId, objectIds, groupId, imp
       const scale = Math.min(320 / (object.width || 320), 240 / (object.height || 240));
       inputs.push({ ...(asset.file ? { path: asset.file } : { dataUrl: `data:${asset.mime};base64,${asset.bytes.toString("base64")}` }),
         name: object.name, prompt: object.prompt, imagegenPrompt: object.imagegenPrompt, crop: object.crop,
+        ...(object.sourceObjectId || object.referenceObjectIds?.length ? {
+          importedRelations: {
+            sourceObjectId: object.sourceObjectId,
+            referenceObjectIds: object.referenceObjectIds
+          }
+        } : {}),
         width: Math.round((object.width || 320) * scale), height: Math.round((object.height || 240) * scale),
         ...(explicitPosition ? {
           x: x + ((offset + index) % columns) * 356,

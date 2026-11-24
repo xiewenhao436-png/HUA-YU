@@ -17,7 +17,8 @@ import { assertBoardAvailable } from "./canvas-index.mjs";
 const execFileAsync = promisify(execFile);
 const jobs = new Map();
 const textRecognitionJobs = new Map();
-const supportedActions = new Set(["remove-bg", "quick-edit", "expand", "edit-elements"]);
+export const maxReferenceImages = 5;
+const supportedActions = new Set(["reference-generate", "remove-bg", "quick-edit", "expand", "edit-elements"]);
 const ignoredGeneratedImagePaths = new Map();
 const globalIgnoredGeneratedImageScope = "__global__";
 const outputPollMs = 1000;
@@ -70,6 +71,16 @@ async function createImageJobUnlocked(projectDir, input, options = {}) {
     throw error;
   }
 
+  const referenceGeneration = action === "reference-generate";
+  const useFirstAsBase = referenceGeneration && input.useFirstAsBase === true;
+  const prompt = typeof input.prompt === "string" ? input.prompt.trim().slice(0, 4000) : "";
+  const references = referenceGeneration
+    ? await requireReferenceImages(projectDir, input.referenceObjectIds, object.id, storeOptions)
+    : [];
+  if (referenceGeneration && !prompt) {
+    throw Object.assign(new Error("Describe the image to generate."), { statusCode: 400 });
+  }
+
   const quickEditAnnotations = action === "quick-edit"
     ? await collectQuickEditAnnotations(projectDir, object, storeOptions)
     : null;
@@ -95,7 +106,9 @@ async function createImageJobUnlocked(projectDir, input, options = {}) {
     canvasId,
     status: "queued",
     objectId: object.id,
-    sourceObjectId: object.id,
+    sourceObjectId: !referenceGeneration || useFirstAsBase ? object.id : null,
+    referenceObjectIds: references.slice(useFirstAsBase ? 1 : 0).map(reference => reference.id),
+    referenceImagePaths: references.map(reference => reference.assetPath),
     sourceImagePath: imagePath,
     imagePath,
     expandOptions,
@@ -105,7 +118,7 @@ async function createImageJobUnlocked(projectDir, input, options = {}) {
     annotationSessionId,
     annotatedImagePath: null,
     annotationManifestPath: null,
-    prompt: typeof input.prompt === "string" ? input.prompt.trim().slice(0, 4000) : "",
+    prompt,
     outputDir,
     logPath,
     textInventoryPath: null,
@@ -131,7 +144,8 @@ async function createImageJobUnlocked(projectDir, input, options = {}) {
       action,
       status: "running",
       name: actionLabel(action),
-      sourceObjectId: object.id,
+      sourceObjectId: job.sourceObjectId,
+      ...(referenceGeneration ? { placementObjectId: object.id, referenceObjectIds: job.referenceObjectIds } : {}),
       width: expandOptions?.targetWidth || object.width,
       height: expandOptions?.targetHeight || object.height
     }, storeOptions);
@@ -372,6 +386,7 @@ async function runJob(projectDir, job, startedAtMs) {
     outputDir: job.outputDir,
     logPath: job.logPath,
     prompt: codexInput.prompt,
+    useFirstAsBase: job.action === "reference-generate" && Boolean(job.sourceObjectId),
     transparentLayerMode: job.transparentLayerMode
   });
   job.imagegenPrompt = codexJob.prompt;
@@ -623,6 +638,9 @@ function timeoutAfter(timeoutMs, onTimeout) {
 }
 
 async function prepareCodexInputForJob(job) {
+  if (job.action === "reference-generate") {
+    return { imagePath: job.referenceImagePaths, prompt: job.prompt };
+  }
   if (job.action === "expand") {
     const inputsDir = path.join(path.dirname(job.outputDir), "inputs");
     const expandInputPath = path.join(inputsDir, "expand-padded-input.png");
@@ -1099,6 +1117,8 @@ async function collectAndPlaceResult(projectDir, job, startedAtMs, { final, dete
     prompt: jobPrompt(job),
     imagegenPrompt: job.imagegenPrompt || "",
     sourceObjectId: job.sourceObjectId,
+    referenceObjectIds: job.referenceObjectIds?.length ? job.referenceObjectIds : undefined,
+    placementObjectId: job.action === "reference-generate" ? job.objectId : null,
     annotationSessionId: job.annotationSessionId || null,
     canvasId: job.canvasId
   });
@@ -1112,6 +1132,8 @@ async function collectAndPlaceResult(projectDir, job, startedAtMs, { final, dete
       prompt: jobPrompt(job),
       imagegenPrompt: job.imagegenPrompt || "",
       sourceObjectId: job.sourceObjectId,
+      referenceObjectIds: job.referenceObjectIds?.length ? job.referenceObjectIds : undefined,
+      placementObjectId: job.action === "reference-generate" ? job.objectId : null,
       canvasId: job.canvasId
     });
   }
@@ -1569,6 +1591,7 @@ function publicJob(job) {
     status: job.status,
     objectId: job.objectId,
     sourceObjectId: job.sourceObjectId,
+    referenceObjectIds: job.referenceObjectIds || [],
     annotationSessionId: job.annotationSessionId || null,
     createdAt: job.createdAt,
     startedAt: job.startedAt,
@@ -1619,6 +1642,24 @@ function publicTextRecognitionJob(job) {
   };
 }
 
+async function requireReferenceImages(projectDir, ids, firstId, options) {
+  if (!Array.isArray(ids) || !ids.length || ids.length > maxReferenceImages ||
+      ids[0] !== firstId || new Set(ids).size !== ids.length ||
+      ids.some(id => typeof id !== "string" || !id)) {
+    throw Object.assign(new Error(`Select 1–${maxReferenceImages} unique reference images, starting with the selected image.`), { statusCode: 400 });
+  }
+  const state = await readState(projectDir, options);
+  const objects = new Map(state.objects.map(object => [object.id, object]));
+  const references = ids.map(id => objects.get(id));
+  for (const [index, object] of references.entries()) {
+    if ((object?.type || "image") !== "image" || !object?.assetPath ||
+        !(await fs.stat(object.assetPath).then(stat => stat.isFile(), () => false))) {
+      throw Object.assign(new Error(`Reference image ${index + 1} must be a readable local canvas image.`), { statusCode: 400 });
+    }
+  }
+  return references;
+}
+
 async function requireImageObject(projectDir, objectId, options = {}) {
   const state = await readState(projectDir, options);
   const object = state.objects.find((item) => item.id === objectId);
@@ -1636,6 +1677,7 @@ async function requireImageObject(projectDir, objectId, options = {}) {
 }
 
 function jobPrompt(job) {
+  if (job.action === "reference-generate") return job.prompt;
   if (job.action === "quick-edit") return `Canvas Quick Edit: ${job.prompt || "edited image"}`;
   if (job.action === "expand") return `Canvas Expand: ${job.prompt || "expanded image"}`;
   if (job.action === "edit-text") return "Canvas Edit Text result";
@@ -1674,6 +1716,7 @@ function buildEditTextPrompt(changes) {
 }
 
 function actionLabel(action) {
+  if (action === "reference-generate") return "Generate from References";
   if (action === "quick-edit") return "Quick Edit";
   if (action === "expand") return "Expand";
   if (action === "edit-text") return "Edit Text";
@@ -1704,20 +1747,24 @@ async function placeImportedAtPlaceholder(projectDir, job) {
     return;
   }
 
-  const positioned = await updateObject(projectDir, imported.id, {
-    x: job.placeholder.x,
-    y: job.placeholder.y,
-    width: job.placeholder.width,
-    height: job.placeholder.height,
-    layoutMode: "canvas-row",
-    sourceObjectId: job.sourceObjectId,
-    jobId: job.id,
-    ...(job.annotationSessionId ? { annotationSessionId: job.annotationSessionId } : {})
-  }, storeOptions);
-  job.imported = [positioned, ...job.imported.slice(1)];
-  if (job.placeholderId) {
-    await deleteObject(projectDir, job.placeholderId, storeOptions).catch(() => {});
-  }
+  await withCanvasWriteLock(projectDir, async () => {
+    const state = await readState(projectDir, storeOptions);
+    const placeholder = state.objects.find(object => object.id === job.placeholderId) || job.placeholder;
+    const positioned = await updateObject(projectDir, imported.id, {
+      x: placeholder.x,
+      y: placeholder.y,
+      width: placeholder.width,
+      height: placeholder.height,
+      layoutMode: "canvas-row",
+      ...(job.sourceObjectId ? { sourceObjectId: job.sourceObjectId } : {}),
+      jobId: job.id,
+      ...(job.annotationSessionId ? { annotationSessionId: job.annotationSessionId } : {})
+    }, storeOptions);
+    job.imported = [positioned, ...job.imported.slice(1)];
+    if (job.placeholderId) {
+      await deleteObject(projectDir, job.placeholderId, storeOptions).catch(() => {});
+    }
+  });
 }
 
 async function placeImportedElementLayers(projectDir, job) {

@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import net from "node:net";
+import fs from "node:fs/promises";
 import { resolveCodexExecutable, spawnCodexProcess, stopCodexProcess } from "./codex-runner.mjs";
 import { APP_VERSION } from "./version.mjs";
+import { isSupportedImageBuffer } from "./store.mjs";
 import { createOperationLease } from "./operation-leases.mjs";
 
 const appServerStartupTimeoutMs = 5000;
@@ -10,6 +12,93 @@ const chatTurnTimeoutMs = 120000;
 const chatBackgroundCompletionTimeoutMs = 30 * 60_000;
 const maxBufferedNotifications = 50;
 const activeChatOperations = new Set();
+
+const maxChatReferenceBytes = 20 * 1024 * 1024;
+const chatReferenceReadTimeoutMs = 8000;
+
+export async function readChatReferenceImages(threadId, { turnId, userMessageText, indexes } = {}) {
+  if (typeof threadId !== "string" || !threadId.trim()) {
+    throw chatReferenceError("当前画布尚未绑定 Codex 对话。", 409);
+  }
+  if (!(typeof turnId === "string" && turnId.trim()) &&
+      !(typeof userMessageText === "string" && userMessageText.trim())) {
+    throw chatReferenceError("请提供附件所在轮次或当前消息的完整原文。");
+  }
+  if (!Array.isArray(indexes) || !indexes.length || indexes.length > 5 ||
+      indexes.some(index => !Number.isSafeInteger(index) || index < 1)) {
+    throw chatReferenceError("请提供 1–5 个从 1 开始的图片附件序号。");
+  }
+
+  const server = await startAppServer();
+  const client = new JsonRpcWebSocketClient(`ws://127.0.0.1:${server.port}`);
+  try {
+    await client.open();
+    await client.request("initialize", {
+      clientInfo: { name: "codex-canvas", version: APP_VERSION },
+      capabilities: { experimentalApi: true }
+    }, chatReferenceReadTimeoutMs);
+
+    let items;
+    if (turnId) {
+      const page = await client.request("thread/items/list", {
+        threadId, turnId, limit: 30, sortDirection: "asc",
+        deferOutput: { commandExecution: true, mcpToolCall: true }
+      }, chatReferenceReadTimeoutMs);
+      items = page?.data?.filter(entry => entry.turnId === turnId).map(entry => entry.item);
+    } else {
+      const page = await client.request("thread/turns/list", {
+        threadId, limit: 3, sortDirection: "desc", itemsView: "full"
+      }, chatReferenceReadTimeoutMs);
+      // A continuation can be stored as a turn with no new user input.
+      items = page?.data?.find(turn => turn.items?.some(item => item.type === "userMessage"))?.items;
+    }
+    return await resolveChatReferenceImages(items, { userMessageText, indexes });
+  } finally {
+    client.close();
+    await server.stop();
+  }
+}
+
+export async function resolveChatReferenceImages(items, { userMessageText, indexes }) {
+  const messages = (items || []).filter(item => item?.type === "userMessage");
+  const matching = typeof userMessageText === "string"
+    ? messages.filter(item => item.content?.filter(input => input.type === "text")
+      .map(input => input.text).join("").trim() === userMessageText.trim())
+    : messages;
+  if (matching.length !== 1) {
+    throw chatReferenceError("无法确认附件对应的唯一用户消息。请核对轮次和消息原文。", 404);
+  }
+  const images = matching[0].content.filter(item => item.type === "localImage" || item.type === "image");
+  return Promise.all(indexes.map(index => readableChatReference(images[index - 1], index)));
+}
+
+async function readableChatReference(image, index) {
+  if (!image) throw chatReferenceError(`这条消息没有第 ${index} 张图片。`, 404);
+  if (image.type === "localImage" && typeof image.path === "string" && path.isAbsolute(image.path) &&
+      (process.platform !== "win32" || /^[a-z]:[\\/]/i.test(image.path))) {
+    const stat = await fs.stat(image.path).catch(() => null);
+    if (stat?.isFile() && stat.size > 0 && stat.size <= maxChatReferenceBytes) {
+      const file = await fs.open(image.path, "r").catch(() => null);
+      if (file) {
+        await file.close();
+        return { path: image.path };
+      }
+    }
+  }
+  if (image.type === "image" && typeof image.url === "string" &&
+      !image.fileId && image.url.length <= Math.ceil(maxChatReferenceBytes / 3) * 4 + 40) {
+    const match = /^data:image\/(?:png|jpe?g|gif|webp|avif);base64,([A-Za-z0-9+/]+={0,2})$/i.exec(image.url);
+    if (match && match[1].length % 4 === 0) {
+      const bytes = Buffer.from(match[1], "base64");
+      if (bytes.length <= maxChatReferenceBytes && isSupportedImageBuffer(bytes)) return { dataUrl: image.url };
+    }
+  }
+  throw chatReferenceError(`第 ${index} 张图片无法从这条消息读取。请提供原图本地文件。`, 422);
+}
+
+function chatReferenceError(message, statusCode = 400) {
+  return Object.assign(new Error(message), { statusCode });
+}
 
 export async function sendImageToBoundChat({ projectDir, threadId, imagePath, prompt, waitForCompletion = false }) {
   if (!threadId) {

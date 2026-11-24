@@ -41,14 +41,14 @@ export async function resolveCodexExecutable() {
   throw error;
 }
 
-export async function startCodexImageJob({ projectDir, action, imagePath, outputDir, logPath, prompt: userPrompt, transparentLayerMode = false }) {
+export async function startCodexImageJob({ projectDir, action, imagePath, outputDir, logPath, prompt: userPrompt, transparentLayerMode = false, useFirstAsBase = false }) {
   const policy = resolveImageExecutionPolicy(action);
-  const prompt = promptForAction({ action, outputDir, userPrompt, transparentLayerMode });
+  const imagePaths = (Array.isArray(imagePath) ? imagePath : [imagePath]).filter(Boolean);
+  const prompt = promptForAction({ action, outputDir, userPrompt, transparentLayerMode, imagePaths, useFirstAsBase });
   const executable = await resolveCodexExecutable();
   await fs.mkdir(outputDir, { recursive: true });
   await fs.mkdir(path.dirname(logPath), { recursive: true });
 
-  const imagePaths = (Array.isArray(imagePath) ? imagePath : [imagePath]).filter(Boolean);
   const args = [
     "exec",
     "--ephemeral"
@@ -242,7 +242,18 @@ function imageWorkerPrompt(outputDir, instructions, filename) {
   ].join("\n");
 }
 
-export function promptForAction({ action, outputDir, userPrompt, transparentLayerMode = false }) {
+export function promptForAction({ action, outputDir, userPrompt, transparentLayerMode = false, imagePaths = [], useFirstAsBase = false }) {
+  if (action === "reference-generate") {
+    return imageWorkerPrompt(outputDir, [
+      useFirstAsBase
+        ? "Edit the first attached image as the visual base according to the user's brief. Use all subsequent attachments as additional visual references in order."
+        : "Generate one new image from the user's brief and all provided reference images, in attachment order.",
+      "Call the native image generation tool with every listed path in its referenced_image_paths argument. Preserve the order. Do not omit an image or substitute a text description for an image input.",
+      `Reference image paths in attachment order: ${JSON.stringify(imagePaths)}`,
+      "If the image generation tool cannot accept the explicit reference images, report the failure without generating an image.",
+      `User brief: ${userPrompt || ""}`
+    ], "reference-generate-result.png");
+  }
   if (action === "recognize-text") {
     const textInventoryPath = path.join(outputDir, "recognized-text.json");
     return [

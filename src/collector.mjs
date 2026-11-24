@@ -56,10 +56,11 @@ export async function collectRecentImages(projectDir, options = {}) {
       name: path.basename(candidate.path),
       prompt: options.prompt || "Collected recent image",
       imagegenPrompt: options.imagegenPrompt || "",
-      ...(options.sourceObjectId ? { x: candidate.x, y: candidate.y } : { autoGroupTitle: "最近生成的图片" }),
+      ...(options.placementObjectId || options.sourceObjectId ? { x: candidate.x, y: candidate.y } : { autoGroupTitle: "最近生成的图片" }),
       batchId: candidate.batchId,
       layoutMode: candidate.layoutMode,
-      sourceObjectId: options.sourceObjectId || null
+      sourceObjectId: options.sourceObjectId || null,
+      referenceObjectIds: options.referenceObjectIds
     }, storeOptions);
     imported.push(object);
   }
@@ -76,8 +77,9 @@ function normalizeCollectLimit(value) {
 function planImageLayout({ candidates, state, options }) {
   if (candidates.length === 0) return [];
 
-  if (options.sourceObjectId) {
-    return planCanvasDerivedRow(candidates, state, options.sourceObjectId);
+  const placementObjectId = options.placementObjectId || options.sourceObjectId;
+  if (placementObjectId) {
+    return planCanvasDerivedRow(candidates, state, placementObjectId);
   }
 
   return groupSessionBatches(candidates).flatMap(batch => {

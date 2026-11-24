@@ -554,6 +554,7 @@ function normalizeState(state = {}, context = {}) {
       .map((object) => normalizePersistedObject(object, context))
       .filter(Boolean)
     : [];
+  remapImportedImageRelations(objects);
   const selection = typeof state.selection === "string" && objects.some((object) => object.id === state.selection)
     ? state.selection
     : null;
@@ -736,23 +737,95 @@ export async function addImage(projectDir, input, options = {}) {
   });
 }
 
+export async function prepareReferenceImages(projectDir, inputs, options = {}) {
+  return withCanvasWriteLock(projectDir, async () => {
+    await assertBoardAvailable(projectDir, canvasIdFrom(options));
+    const state = await readState(projectDir, { ...options, readOnly: true });
+    const prepared = [];
+    for (const [index, input] of inputs.entries()) {
+      if (input.objectId) {
+        const object = state.objects.find(item => item.id === input.objectId && (item.type || "image") === "image");
+        if (!object?.assetPath || !(await fs.stat(object.assetPath).then(stat => stat.isFile(), () => false))) {
+          throw Object.assign(new Error(`Reference ${index + 1} is not a readable image on this canvas.`), { statusCode: 400 });
+        }
+        prepared.push({ object });
+        continue;
+      }
+      const buffer = await readReferenceImage(input, index);
+      prepared.push({ buffer, contentHash: imageContentHash(buffer), name: input.name || (input.path ? path.basename(input.path) : `对话参考图 ${index + 1}`) });
+    }
+
+    const references = new Map();
+    const resolvedHashes = new Map();
+    for (const entry of prepared) {
+      let object = entry.object;
+      let imported = false;
+      if (!object) {
+        object = resolvedHashes.get(entry.contentHash) || await findDuplicateImageObject(state, { contentHash: entry.contentHash });
+        if (!object) {
+          const mime = referenceImageMime(entry.buffer);
+          object = await addImageUnlocked(projectDir, {
+            name: entry.name,
+            dataUrl: `data:${mime};base64,${entry.buffer.toString("base64")}`,
+            autoGroupTitle: "对话参考图"
+          }, options);
+          imported = true;
+        }
+        resolvedHashes.set(entry.contentHash, object);
+      }
+      if (!references.has(object.id)) {
+        references.set(object.id, { objectId: object.id, assetPath: object.assetPath, name: object.name, imported });
+      }
+    }
+    return [...references.values()];
+  });
+}
+
+async function readReferenceImage(input, index) {
+  let buffer;
+  if (input.path && path.isAbsolute(input.path)) {
+    try {
+      buffer = await fs.readFile(input.path);
+    } catch (error) {
+      throw classifyImageSourceError(error);
+    }
+  } else if (input.dataUrl) {
+    const match = /^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/i.exec(input.dataUrl);
+    if (match) buffer = decodeBase64ImagePayload(match[1]);
+  }
+  if (!buffer || !isSupportedImageBuffer(buffer)) {
+    throw Object.assign(new Error(`Reference ${index + 1} must be a supported image file or image data URL.`), { statusCode: 400 });
+  }
+  return buffer;
+}
+
+function referenceImageMime(buffer) {
+  if (hasJpegSignature(buffer)) return "image/jpeg";
+  if (hasGifSignature(buffer)) return "image/gif";
+  if (hasWebpSignature(buffer)) return "image/webp";
+  if (hasAvifSignature(buffer)) return "image/avif";
+  return "image/png";
+}
+
 async function addImageUnlocked(projectDir, input, options = {}) {
   if (shouldDedupeImage(input)) {
     const existing = await findExistingImageForInput(projectDir, input, options);
-    if (existing) return selectExistingImage(projectDir, existing.id, options);
+    if (existing) return selectExistingImage(projectDir, existing.id, input, options);
   }
 
   const asset = await persistImage(projectDir, input, options);
   return mutateState(projectDir, options, async (state) => {
-    const duplicate = shouldDedupeImage(input) ? await findDuplicateImageObject(state, asset) : null;
+    const duplicate = shouldDedupeImage(input) ? await findDuplicateImageObject(state, asset, hasImageRelations(input)) : null;
     if (duplicate) {
       await removeDuplicateAsset(asset, duplicate);
+      const image = withDeclaredImageRelations(duplicate, input);
       return {
         state: {
           ...state,
-          selection: duplicate.id
+          objects: state.objects.map(object => object.id === image.id ? image : object),
+          selection: image.id
         },
-        value: duplicate
+        value: image
       };
     }
 
@@ -778,6 +851,7 @@ function imageObjectForAsset(asset, input, objects) {
       prompt: sanitizeString(input.prompt, "", 4000),
       imagegenPrompt: sanitizeString(input.imagegenPrompt, "", 20000),
       sourceObjectId: typeof input.sourceObjectId === "string" ? input.sourceObjectId.slice(0, 300) : null,
+      ...referenceMetadata(input),
       batchId: typeof input.batchId === "string" ? input.batchId.slice(0, 300) : null,
       layoutMode: sanitizeString(input.layoutMode, "manual", 80),
       x: Number.isFinite(input.x) ? sanitizeCoordinate(input.x) : 120 + (count % 5) * 56,
@@ -796,10 +870,59 @@ function imageObjectForAsset(asset, input, objects) {
     return automaticImagePlacement(object, input, objects);
 }
 
+function hasImageRelations(input) {
+  return typeof input.sourceObjectId === "string" || Array.isArray(input.referenceObjectIds);
+}
+
+function withDeclaredImageRelations(object, input) {
+  if (!hasImageRelations(input)) return object;
+  return {
+    ...object,
+    ...(typeof input.sourceObjectId === "string" && input.sourceObjectId !== object.id
+      ? { sourceObjectId: input.sourceObjectId.slice(0, 300) } : {}),
+    ...referenceMetadata({ id: object.id, referenceObjectIds: input.referenceObjectIds })
+  };
+}
+
+function normalizeReferenceIds(ids, ownId = null) {
+  if (!Array.isArray(ids)) return [];
+  return [...new Set(ids.filter(id => typeof id === "string" && id && id.length <= 200 && id !== ownId))];
+}
+
+function referenceMetadata(input) {
+  return Array.isArray(input.referenceObjectIds)
+    ? { referenceObjectIds: normalizeReferenceIds(input.referenceObjectIds, input.id) }
+    : {};
+}
+
+function remapImportedImageRelations(objects) {
+  const localIds = new Map();
+  const keyFor = (object, originId) => JSON.stringify([object.importGroupId, object.importedFrom.boardId, originId]);
+  for (const object of objects) {
+    if (object.importGroupId && object.importedFrom?.objectId) {
+      localIds.set(keyFor(object, object.importedFrom.objectId), object.id);
+    }
+  }
+  for (const object of objects) {
+    if (!object.importGroupId || !object.importedFrom?.objectId || !object.importedRelations) continue;
+    const { sourceObjectId, referenceObjectIds } = object.importedRelations;
+    const localId = originId => localIds.get(keyFor(object, originId));
+    object.sourceObjectId = sourceObjectId ? localId(sourceObjectId) || null : null;
+    object.referenceObjectIds = normalizeReferenceIds(referenceObjectIds.map(localId), object.id);
+  }
+}
+
 function importMetadata(input) {
   if (!input.importGroupId || !input.importedFrom) return {};
   const from = input.importedFrom;
-  return { importGroupId: sanitizeString(input.importGroupId, "", 200), importedFrom: {
+  const relations = input.importedRelations;
+  const relationMetadata = relations && typeof relations === "object"
+    ? { importedRelations: {
+      sourceObjectId: sanitizeString(relations.sourceObjectId, "", 200) || null,
+      referenceObjectIds: normalizeReferenceIds(relations.referenceObjectIds)
+    } }
+    : {};
+  return { ...relationMetadata, importGroupId: sanitizeString(input.importGroupId, "", 200), importedFrom: {
     boardId: sanitizeString(from.boardId, "", 200), objectId: sanitizeString(from.objectId, "", 200),
     threadId: sanitizeString(from.threadId, "", 200), threadTitle: sanitizeString(from.threadTitle, "", 500),
     boardTitle: sanitizeString(from.boardTitle, "", 500), importedAt: sanitizeString(from.importedAt, "", 80)
@@ -817,23 +940,26 @@ export async function addImagesBatch(projectDir, inputs, options = {}) {
 
 async function addImagesBatchUnlocked(projectDir, inputs, options = {}) {
   const before = await readState(projectDir, { ...options, readOnly: true });
-  const existing = new Set(before.objects.map(o => `${o.importGroupId}\n${o.importedFrom?.objectId}`));
+  const importKey = object => JSON.stringify([object.importGroupId, object.importedFrom?.boardId, object.importedFrom?.objectId]);
+  const existing = new Set(before.objects.map(importKey));
   const prepared = [];
   for (const input of inputs) {
-    if (existing.has(`${input.importGroupId}\n${input.importedFrom?.objectId}`)) continue;
+    if (existing.has(importKey(input))) continue;
     prepared.push({ input, asset: await persistImage(projectDir, input, options) });
   }
   return mutateState(projectDir, options, state => {
-    const keys = new Set(state.objects.map(o => `${o.importGroupId}\n${o.importedFrom?.objectId}`));
+    const keys = new Set(state.objects.map(importKey));
     const objects = [];
     for (const { input, asset } of prepared) {
-      const key = `${input.importGroupId}\n${input.importedFrom?.objectId}`;
+      const key = importKey(input);
       if (keys.has(key)) continue;
       keys.add(key);
       objects.push(imageObjectForAsset(asset, input, [...state.objects, ...objects]));
     }
+    const updatedObjects = [...state.objects, ...objects];
+    remapImportedImageRelations(updatedObjects);
     return {
-      state: { ...state, objects: [...state.objects, ...objects], selection: objects.at(-1)?.id || state.selection },
+      state: { ...state, objects: updatedObjects, selection: objects.at(-1)?.id || state.selection },
       value: objects
     };
   });
@@ -844,16 +970,18 @@ function shouldDedupeImage(input = {}) {
   return input.dedupe === true || Boolean(input.path);
 }
 
-async function selectExistingImage(projectDir, id, options = {}) {
+async function selectExistingImage(projectDir, id, input, options = {}) {
   return mutateState(projectDir, options, (state) => {
     const object = state.objects.find((item) => item.id === id);
     if (!object) return { state, value: null };
+    const image = withDeclaredImageRelations(object, input);
     return {
       state: {
         ...state,
-        selection: object.id
+        objects: state.objects.map(item => item.id === image.id ? image : item),
+        selection: image.id
       },
-      value: object
+      value: image
     };
   });
 }
@@ -862,7 +990,7 @@ async function findExistingImageForInput(projectDir, input, options = {}) {
   const fingerprint = await imageInputFingerprint(input);
   if (!fingerprint) return null;
   const state = await readState(projectDir, options);
-  return findDuplicateImageObject(state, fingerprint);
+  return findDuplicateImageObject(state, fingerprint, hasImageRelations(input));
 }
 
 async function imageInputFingerprint(input = {}) {
@@ -892,7 +1020,7 @@ async function imageInputFingerprint(input = {}) {
   return null;
 }
 
-async function findDuplicateImageObject(state, fingerprint) {
+async function findDuplicateImageObject(state, fingerprint, exactSourceOnly = false) {
   const sourcePath = typeof fingerprint.sourcePath === "string" ? path.resolve(fingerprint.sourcePath) : null;
   for (const object of state.objects) {
     if ((object.type || "image") !== "image") continue;
@@ -900,7 +1028,7 @@ async function findDuplicateImageObject(state, fingerprint) {
     if (sourcePath && path.resolve(object.assetPath || "") === sourcePath) return object;
   }
 
-  if (!fingerprint.contentHash) return null;
+  if (exactSourceOnly || !fingerprint.contentHash) return null;
   for (const object of state.objects) {
     if ((object.type || "image") !== "image" || !object.assetPath) continue;
     try {
@@ -943,9 +1071,10 @@ export async function addObject(projectDir, input, options = {}) {
 
 export async function addJobPlaceholder(projectDir, input, options = {}) {
   return mutateState(projectDir, options, (state) => {
-    const source = state.objects.find((object) => object.id === input.sourceObjectId);
+    const anchorId = input.placementObjectId || input.sourceObjectId;
+    const source = state.objects.find((object) => object.id === anchorId);
     if (!source) {
-      const error = new Error(`Source canvas object not found: ${input.sourceObjectId || "(missing)"}`);
+      const error = new Error(`Source canvas object not found: ${anchorId || "(missing)"}`);
       error.statusCode = 404;
       throw error;
     }
@@ -960,7 +1089,8 @@ export async function addJobPlaceholder(projectDir, input, options = {}) {
       name: sanitizeString(input.name, "Working"),
       action: sanitizeString(input.action, "image-job", 80),
       status: sanitizeString(input.status, "running", 80),
-      sourceObjectId: source.id,
+      sourceObjectId: input.sourceObjectId || null,
+      ...referenceMetadata(input),
       layoutMode: "canvas-row",
       src: source.src || null,
       assetPath: source.assetPath || null,
@@ -974,7 +1104,8 @@ export async function addJobPlaceholder(projectDir, input, options = {}) {
     };
 
     const shiftedObjects = state.objects.map((item) => {
-      if (item.sourceObjectId !== source.id) return item;
+      const itemAnchorId = item.sourceObjectId || (item.layoutMode === "canvas-row" ? item.referenceObjectIds?.[0] : null);
+      if (itemAnchorId !== source.id) return item;
       if (item.x < position.x) return item;
       return { ...item, x: item.x + shift };
     });
@@ -1071,10 +1202,14 @@ function normalizePersistedObject(object, context = {}) {
     width: sanitizeDimension(object.width, type === "text" ? 220 : 1),
     height: sanitizeDimension(object.height, type === "text" ? 80 : 1)
   };
-  Object.assign(normalized, importMetadata(object));
+  delete normalized.anchorImageId;
+  delete normalized.referenceObjectIds;
+  delete normalized.importedRelations;
+  Object.assign(normalized, referenceMetadata({ ...object, id }), importMetadata(object));
   if (typeof object.createdAt !== "string") normalized.createdAt = new Date().toISOString();
   if (Number.isFinite(object.durationMs)) normalized.durationMs = sanitizeDurationMs(object.durationMs);
   if (type === "text") {
+    Object.assign(normalized, textAnchorPatch(object.anchorImageId));
     normalized.text = sanitizeString(object.text, "Text", 20000, false);
     normalized.fontSize = sanitizeFontSize(object.fontSize);
     normalized.color = sanitizeString(object.color, "#202124", 80);
@@ -1444,8 +1579,16 @@ function objectWithPatch(object, patch) {
   };
 }
 
+function textAnchorPatch(value) {
+  if (value === null) return { anchorImageId: null };
+  if (typeof value === "string" && value.trim() && value.length <= 200) {
+    return { anchorImageId: value.trim() };
+  }
+  return {};
+}
+
 function sanitizeObjectPatch(patch = {}, object) {
-  const next = {};
+  const next = object?.type === "text" ? textAnchorPatch(patch.anchorImageId) : {};
   const coordinate = object?.autoImageGroup ? normalizeAutoCoordinate : sanitizeCoordinate;
   for (const key of ["x", "y"]) {
     if (Number.isFinite(patch[key])) next[key] = coordinate(patch[key]);
@@ -1709,6 +1852,7 @@ function normalizeObject(input) {
   if (type === "text") {
     return {
       ...base,
+      ...textAnchorPatch(input.anchorImageId),
       text: sanitizeString(input.text, "Text", 20000, false),
       fontSize: Number.isFinite(input.fontSize) ? sanitizeFontSize(input.fontSize) : 28,
       color: sanitizeString(input.color, "#202124", 80)

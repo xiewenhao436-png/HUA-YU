@@ -1,8 +1,12 @@
+export function importFrameId(object) {
+  return object.autoImageGroup?.panelId || (object.importedFrom && object.importGroupId);
+}
+
 export function createImportFrames(host) {
   function groups() {
     const groups = new Map();
     for (const object of host.objects()) {
-      const id = object.autoImageGroup?.panelId || (object.importedFrom && object.importGroupId);
+      const id = importFrameId(object);
       if (!id) continue;
       if (!groups.has(id)) groups.set(id, []);
       groups.get(id).push(object);
